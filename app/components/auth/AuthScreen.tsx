@@ -75,7 +75,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
             Zmayy
           </motion.h1>
           <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-            {mode === 'login' ? 'Welcome back 👋' : 'Create your account'}
+            {mode === 'login' ? 'Sign in to continue' : 'Create your account'}
           </p>
         </div>
 

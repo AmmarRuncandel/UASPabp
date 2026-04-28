@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { ToastProvider }   from '@/app/components/ui/Toast';
+import { NetworkStatus }  from '@/app/components/ui/NetworkStatus';
+import { CommandMenu }    from '@/app/components/ui/CommandMenu';
 
 const inter = Inter({
   subsets: ["latin"],
@@ -19,7 +22,13 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={`${inter.variable} h-full`}>
-      <body className="h-full overflow-hidden">{children}</body>
+      <body className="h-full overflow-hidden">
+        <ToastProvider>
+          <NetworkStatus />
+          <CommandMenu />
+          {children}
+        </ToastProvider>
+      </body>
     </html>
   );
 }
