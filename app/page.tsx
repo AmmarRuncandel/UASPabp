@@ -30,7 +30,6 @@ import type { Profile } from '@/utils/supabase/types';
 import type { Friend }     from '@/app/components/friends/FriendsPanel';
 import type { ChatFriend } from '@/app/components/chat/ChatPanel';
 import type { User }       from '@supabase/supabase-js';
-import { ChatNotificationsProvider } from '@/app/context/ChatNotifications';
 
 type ActivePanel = 'none' | 'friends' | 'chat' | 'profile';
 
@@ -286,7 +285,6 @@ export default function Home() {
         isGhostMode={isGhostMode}
         pendingCount={pendingCount}
       />
-      {/* ChatNotificationsProvider wraps page at top; no shim needed here. */}
     </div>
   );
 }

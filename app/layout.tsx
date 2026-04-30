@@ -6,6 +6,7 @@ import { NetworkStatus }  from '@/app/components/ui/NetworkStatus';
 import { CommandMenu }    from '@/app/components/ui/CommandMenu';
 import { ServiceWorkerRegister } from '@/app/components/ui/ServiceWorkerRegister';
 import { ErrorBoundary } from '@/app/components/ui/ErrorBoundary';
+import { ChatNotificationsProvider } from '@/app/context/ChatNotifications';
 
 const inter = Inter({
   subsets: ["latin"],
@@ -45,7 +46,9 @@ export default function RootLayout({
             <NetworkStatus />
             <CommandMenu />
             <ServiceWorkerRegister />
-            {children}
+            <ChatNotificationsProvider>
+              {children}
+            </ChatNotificationsProvider>
           </ToastProvider>
         </ErrorBoundary>
       </body>
