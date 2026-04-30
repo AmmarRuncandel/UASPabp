@@ -172,12 +172,18 @@ export default function LoginPage() {
           style={{ background: 'linear-gradient(135deg, rgba(252,213,53,0.07) 0%, transparent 60%)' }}
         >
           <motion.div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl font-black mx-auto mb-4"
-            style={{ background: '#FCD535', color: '#0B0E11', boxShadow: '0 0 32px rgba(252,213,53,0.35)' }}
+            className="w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-4 flex-shrink-0"
+            style={{ boxShadow: '0 0 32px rgba(252,213,53,0.35)' }}
             whileHover={{ scale: 1.05 }}
-            aria-hidden="true"
           >
-            Z
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/images/zmay_logo.png"
+              alt="Zmayy Logo"
+              width={64}
+              height={64}
+              className="w-16 h-16 object-cover rounded-xl"
+            />
           </motion.div>
           <h1 className="text-2xl font-bold tracking-tight" style={{ color: 'var(--color-primary)' }}>
             Zmayy

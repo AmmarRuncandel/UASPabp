@@ -11,6 +11,9 @@ export interface Profile {
   last_lat: number | null;
   last_lng: number | null;
   updated_at: string | null;
+  is_ghost_mode?: boolean;
+  notifications_enabled?: boolean;
+  is_public?: boolean;
 }
 
 export type FriendshipStatus = 'pending' | 'accepted';

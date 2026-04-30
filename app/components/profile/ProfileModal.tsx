@@ -12,12 +12,15 @@
 import { useEffect, useState } from 'react';
 import {
   X, Eye, EyeOff, LogOut, MapPin, Bell, ShieldCheck, Nfc,
-  ScanLine, Settings, Loader2,
+  ScanLine, Settings, Loader2, Edit2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { useToast }        from '@/app/components/ui/Toast';
 import { useSound }        from '@/app/hooks/useSound';
+import { EditProfileModal } from '@/app/components/profile/EditProfileModal';
+import { NotificationsSettingsModal } from '@/app/components/profile/NotificationsSettingsModal';
+import { PrivacySettingsModal } from '@/app/components/profile/PrivacySettingsModal';
 import { createClient }    from '@/utils/supabase/client';
 import type { Profile }    from '@/utils/supabase/types';
 
@@ -87,6 +90,10 @@ export function ProfileModal({
   const [loadingUser,   setLoadingUser]   = useState(true);
   const [loggingOut,    setLoggingOut]    = useState(false);
   const [isOnlineNow,   setIsOnlineNow]   = useState(false);
+  const [isEditOpen,    setIsEditOpen]    = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
+  const [togglingGhost, setTogglingGhost] = useState(false);
 
   function lastSeenText(updatedAt: string | null | undefined) {
     if (!updatedAt) return '—';
@@ -146,8 +153,29 @@ export function ProfileModal({
   }, [profile?.updated_at]);
 
   // ── Ghost mode toggle ──────────────────────────────────────────────────────
-  function handleToggleGhost() {
+  async function handleToggleGhost() {
+    if (!userId) return;
+
+    setTogglingGhost(true);
     const next = !isGhostMode;
+
+    // Update in database
+    const { error } = await supabase
+      .from('profiles')
+      .update({ is_ghost_mode: next })
+      .eq('id', userId);
+
+    if (error) {
+      toast({
+        variant: 'error',
+        title: 'Gagal mengubah mode',
+        description: error.message,
+      });
+      setTogglingGhost(false);
+      return;
+    }
+
+    setTogglingGhost(false);
     onToggleGhost();
     play('toggle');
     toast(
@@ -247,6 +275,22 @@ export function ProfileModal({
             <X size={18} />
           </button>
 
+          {/* Zmayy Logo (bulat) */}
+          <motion.div
+            className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4"
+            style={{ background: 'var(--color-gold)' }}
+            whileHover={{ scale: 1.08 }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/images/zmay_logo.png"
+              alt="Zmayy"
+              width={48}
+              height={48}
+              className="w-12 h-12 object-cover rounded-full"
+            />
+          </motion.div>
+
           {/* Avatar */}
           <AnimatePresence mode="wait">
             {loadingUser ? (
@@ -262,7 +306,7 @@ export function ProfileModal({
               <motion.div
                 key="avatar"
                 initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }}
-                className="w-20 h-20 rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-3"
+                className="w-20 h-20 rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-3 relative"
                 style={{ background: 'var(--color-gold)', color: 'var(--color-base)', boxShadow: '0 0 0 4px rgba(252,213,53,0.3)' }}
                 aria-hidden="true"
               >
@@ -274,9 +318,21 @@ export function ProfileModal({
           <h3 className="text-lg font-bold" style={{ color: 'var(--color-primary)' }}>
             {loadingUser ? '—' : displayName}
           </h3>
-          <p className="text-sm mt-0.5" style={{ color: 'var(--color-muted)' }}>
-            {loadingUser ? '—' : `@${username}`}
-          </p>
+          <div className="flex items-center justify-center gap-2 mt-2">
+            <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+              {loadingUser ? '—' : `@${username}`}
+            </p>
+            {!loadingUser && (
+              <button
+                onClick={() => setIsEditOpen(true)}
+                className="p-1 rounded-lg hover:bg-white/5 transition-colors"
+                style={{ color: 'var(--color-gold)' }}
+                aria-label="Edit profil"
+              >
+                <Edit2 size={14} />
+              </button>
+            )}
+          </div>
           {email && !loadingUser && (
             <p className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>{email}</p>
           )}
@@ -317,10 +373,11 @@ export function ProfileModal({
             <button
               id="ghost-mode-toggle"
               onClick={handleToggleGhost}
+              disabled={togglingGhost}
               role="switch"
               aria-checked={isGhostMode}
               aria-label="Aktifkan mode hantu"
-              className={`toggle-track flex-shrink-0 ${isGhostMode ? 'active' : ''}`}
+              className={`toggle-track flex-shrink-0 ${isGhostMode ? 'active' : ''} disabled:opacity-50`}
             >
               <span className="toggle-thumb" />
             </button>
@@ -331,28 +388,28 @@ export function ProfileModal({
             Icon={MapPin}
             title="Berbagi Lokasi"
             subtitle="Hanya teman"
-            onClick={() => toast({ variant: 'info', title: 'Berbagi lokasi', description: 'Pengaturan ini akan aktif setelah logika privasi lokasi selesai dihubungkan.' })}
+            onClick={() => toast({ variant: 'info', title: 'Berbagi lokasi', description: 'Lokasi Anda dibagikan ke teman yang sudah ditambahkan.' })}
           />
           <SettingRow
             id="profile-notifications-btn"
             Icon={Bell}
             title="Notifikasi"
-            subtitle="Semua aktif"
-            onClick={() => toast({ variant: 'info', title: 'Notifikasi', description: 'Panel pengaturan notifikasi sedang disiapkan.' })}
+            subtitle={profile?.notifications_enabled ?? true ? 'Semua aktif' : 'Dimatikan'}
+            onClick={() => setIsNotificationsOpen(true)}
           />
           <SettingRow
             id="profile-privacy-btn"
             Icon={ShieldCheck}
             title="Privasi &amp; Keamanan"
             subtitle="Kelola data &amp; pemblokiran"
-            onClick={() => toast({ variant: 'info', title: 'Privasi & keamanan', description: 'Pengaturan detail privasi akan menyusul setelah lapisan data siap.' })}
+            onClick={() => setIsPrivacyOpen(true)}
           />
           <SettingRow
             id="profile-settings-btn"
             Icon={Settings}
             title="Pengaturan"
             subtitle="Bahasa, tema, dan lainnya"
-            onClick={() => toast({ variant: 'info', title: 'Pengaturan', description: 'Menu pengaturan lengkap belum dibuka, jadi row ini menampilkan status saat ini.' })}
+            onClick={() => toast({ variant: 'info', title: 'Pengaturan lanjutan', description: 'Menu pengaturan lebih banyak tersedia di versi berikutnya.' })}
           />
         </div>
 
@@ -440,6 +497,39 @@ export function ProfileModal({
           </button>
         </div>
       </motion.div>
+
+      {/* Edit Profile Modal */}
+      <EditProfileModal
+        profile={profile}
+        isOpen={isEditOpen}
+        onClose={() => setIsEditOpen(false)}
+        onSave={() => {
+          // Refresh profile data
+          async function refresh() {
+            const { data } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', userId)
+              .single();
+            if (data) setProfile(data as Profile);
+          }
+          refresh();
+        }}
+      />
+
+      {/* Notifications Settings Modal */}
+      <NotificationsSettingsModal
+        profile={profile}
+        isOpen={isNotificationsOpen}
+        onClose={() => setIsNotificationsOpen(false)}
+      />
+
+      {/* Privacy Settings Modal */}
+      <PrivacySettingsModal
+        profile={profile}
+        isOpen={isPrivacyOpen}
+        onClose={() => setIsPrivacyOpen(false)}
+      />
     </motion.div>
   );
 }

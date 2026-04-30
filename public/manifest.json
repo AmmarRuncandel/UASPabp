@@ -1,0 +1,52 @@
+{
+  "name": "Zmayy — Social Mapping & Real-Time Chat",
+  "short_name": "Zmayy",
+  "description": "Discover friends near you, share your location, and chat in real time with Zmayy social mapping application.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0B0E11",
+  "background_color": "#0B0E11",
+  "icons": [
+    {
+      "src": "/images/zmay_logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/images/zmay_logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64",
+      "type": "image/x-icon"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/images/zmay_logo.png",
+      "sizes": "540x720",
+      "type": "image/png"
+    }
+  ],
+  "categories": ["social", "productivity"],
+  "shortcuts": [
+    {
+      "name": "Buka Peta",
+      "short_name": "Peta",
+      "description": "Lihat teman di peta",
+      "url": "/",
+      "icons": [
+        {
+          "src": "/images/zmay_logo.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ]
+}

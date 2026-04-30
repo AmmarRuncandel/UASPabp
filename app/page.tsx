@@ -23,6 +23,7 @@ import { NavBar }       from '@/app/components/ui/NavBar';
 import { FriendsPanel } from '@/app/components/friends/FriendsPanel';
 import { ChatPanel }    from '@/app/components/chat/ChatPanel';
 import { ProfileModal } from '@/app/components/profile/ProfileModal';
+import { ProfileCompletionModal } from '@/app/components/profile/ProfileCompletionModal';
 import { createClient } from '@/utils/supabase/client';
 import type { Profile } from '@/utils/supabase/types';
 
@@ -52,10 +53,12 @@ export default function Home() {
   const supabase = createClient();
 
   const [user,        setUser]        = useState<User | null>(null);
+  const [profile,     setProfile]     = useState<Profile | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
   const [isGhostMode, setIsGhostMode] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [focusedProfileId, setFocusedProfileId] = useState<string | null>(null);
+  const [showProfileCompletion, setShowProfileCompletion] = useState(false);
 
   const [activeChatFriend, setActiveChatFriend] = useState<ChatFriend>({
     id: '', name: 'Friend', avatar: '?', distance: '—',
@@ -63,12 +66,28 @@ export default function Home() {
 
   // ── Resolve session ────────────────────────────────────────────────────────
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (!user) {
         router.replace('/login');
         return;
       }
       setUser(user);
+
+      // Fetch profile and check if complete
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (profileData) {
+        setProfile(profileData as Profile);
+        // Show completion modal if display_name is empty
+        if (!profileData.display_name) {
+          setShowProfileCompletion(true);
+        }
+        setIsGhostMode(profileData.is_ghost_mode ?? false);
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -149,6 +168,26 @@ export default function Home() {
         <MapView isGhostMode={isGhostMode} userId={user.id} focusProfileId={focusedProfileId} />
       </div>
 
+      {/* Profile Completion Modal */}
+      {user && showProfileCompletion && (
+        <ProfileCompletionModal
+          userId={user.id}
+          email={user.email ?? 'user'}
+          onComplete={() => {
+            setShowProfileCompletion(false);
+            // Refresh profile data
+            supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', user.id)
+              .single()
+              .then(({ data }) => {
+                if (data) setProfile(data as Profile);
+              });
+          }}
+        />
+      )}
+
       {/* Layer 30 — Slide-in sidebars */}
       <AnimatePresence mode="wait">
         {activePanel === 'friends' && (
@@ -174,7 +213,9 @@ export default function Home() {
           <ProfileModal
             key="profile"
             isGhostMode={isGhostMode}
-            onToggleGhost={() => setIsGhostMode((v) => !v)}
+            onToggleGhost={() => {
+              setIsGhostMode((v) => !v);
+            }}
             onClose={() => setActivePanel('none')}
             onLogout={handleLogout}
           />

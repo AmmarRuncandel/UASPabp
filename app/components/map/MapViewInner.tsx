@@ -207,7 +207,8 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
 
   // ── Geolocation watchPosition ──────────────────────────────────────────────
   useEffect(() => {
-    if (!('geolocation' in navigator)) return;
+    // Skip geolocation tracking if ghost mode is enabled
+    if (isGhostMode || !('geolocation' in navigator)) return;
 
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
@@ -226,7 +227,7 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [userId, supabase]);
+  }, [userId, supabase, isGhostMode]);
 
   // ── Fetch other users' profiles ────────────────────────────────────────────
   const fetchProfiles = useCallback(async () => {
