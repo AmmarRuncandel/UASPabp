@@ -62,7 +62,14 @@ function ChatBubble({ message }: { message: UIMessage }) {
           ? { background: 'var(--color-gold)', color: '#0B0E11' }
           : { background: 'var(--color-surface)', color: 'var(--color-primary)', border: '1px solid var(--color-border)' }}
       >
-        <p>{message.text}</p>
+        {message.text.startsWith('[IMAGE]:') ? (
+          <div className="max-w-[240px] max-h-[300px] overflow-hidden rounded-md">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={message.text.replace('[IMAGE]:', '')} alt="shared" style={{ width: '100%', height: 'auto', display: 'block' }} />
+          </div>
+        ) : (
+          <p>{message.text}</p>
+        )}
         <p className="text-[10px] mt-1 text-right"
           style={{ color: message.sent ? 'rgba(11,14,17,0.55)' : 'var(--color-muted)' }}>
           {message.time}
@@ -135,8 +142,66 @@ export function ChatPanel({ friend, currentUserId, onClose, onOpenFriends }: Cha
   const clearRemoteTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef   = useRef<HTMLDivElement>(null);
   const panelRef    = useRef<HTMLElement>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const channelRef  = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+  // Handle files dropped/selected — upload to Supabase Storage and send message with public URL
+  async function handleImageFile(file: File) {
+    if (!file.type.startsWith('image/')) return;
+
+    // Prepare storage path
+    const filePath = `chat_uploads/${currentUserId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
+
+    // Optimistic UI placeholder while uploading
+    const opt: UIMessage = { id: `opt-${Date.now()}`, text: '[IMAGE_UPLOADING]', sent: true, time: fmtTime(new Date().toISOString()) };
+    setMessages((prev) => [...prev, opt].slice(-MAX_MSG));
+    play('send');
+
+    try {
+      const { error: uploadError } = await supabase.storage.from('chat_images').upload(filePath, file, { cacheControl: '3600', upsert: false });
+      if (uploadError) throw uploadError;
+
+      const { data: publicData } = await supabase.storage.from('chat_images').getPublicUrl(filePath);
+      const publicUrl = (publicData as any)?.publicUrl ?? '';
+
+      if (!publicUrl) throw new Error('Failed to obtain public URL');
+
+      const content = `[IMAGE]:${publicUrl}`;
+
+      // Replace optimistic placeholder with real image message
+      setMessages((prev) => prev.map((m) => (m.id === opt.id ? { ...m, text: content } : m)));
+
+      const { error } = await supabase.from('messages').insert({ sender_id: currentUserId, receiver_id: friend.id, content });
+      if (error) {
+        setMessages((prev) => prev.filter((m) => m.id !== opt.id));
+      }
+    } catch (err) {
+      console.warn('[Chat] Image upload failed', err);
+      setMessages((prev) => prev.filter((m) => m.id !== opt.id));
+    }
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragOver(false);
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    if (dt.files && dt.files.length > 0) {
+      const f = dt.files[0];
+      handleImageFile(f);
+    } else {
+      // Try reading images from clipboard items
+      const items = dt.items;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind === 'file') {
+          const f = it.getAsFile();
+          if (f) { handleImageFile(f); break; }
+        }
+      }
+    }
+  }
 
   const hasFriend = Boolean(friend.id);
 
@@ -262,7 +327,7 @@ export function ChatPanel({ friend, currentUserId, onClose, onOpenFriends }: Cha
       aria-label="Panel obrolan"
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={(e) => { if (!panelRef.current?.contains(e.relatedTarget as Node)) setIsDragOver(false); }}
-      onDrop={(e) => { e.preventDefault(); setIsDragOver(false); }}
+      onDrop={handleDrop}
     >
       <AnimatePresence>
         {isDragOver && (
@@ -343,6 +408,21 @@ export function ChatPanel({ friend, currentUserId, onClose, onOpenFriends }: Cha
             style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted)' }}>
             <ImageIcon size={14} />
             <span>Seret &amp; lepas gambar untuk berbagi lokasi</span>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-2 px-3 py-1 rounded-md text-xs font-semibold"
+                style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--color-primary)' }}
+                aria-label="Unggah gambar"
+              >
+                + Upload
+              </button>
+              <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleImageFile(f);
+                e.currentTarget.value = '';
+              }} />
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

@@ -1,6 +1,7 @@
-'use client';
+"use client";
 
 import { useEffect, useState } from 'react';
+import { useChatNotifications } from '@/app/context/ChatNotifications';
 import { Users, MessageCircle, User, Download, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useToast } from '@/app/components/ui/Toast';
@@ -18,6 +19,7 @@ interface NavBarProps {
   onToggle: (panel: ActiveSidebar) => void;
   isGhostMode: boolean;
   pendingCount?: number;
+  chatPendingCount?: number;
 }
 
 const NAV_ITEMS = [
@@ -57,6 +59,8 @@ export function NavBar({ activeSidebar, onToggle, isGhostMode, pendingCount = 0 
     setInstallPrompt(null);
     setShowInstallBanner(false);
   }
+
+  const { count: chatPendingCount } = useChatNotifications();
 
   return (
     <>
@@ -126,6 +130,10 @@ export function NavBar({ activeSidebar, onToggle, isGhostMode, pendingCount = 0 
         {NAV_ITEMS.map(({ id, label, Icon }) => {
           const isActive = activeSidebar === id;
           const hasBadge = id === 'friends' && pendingCount > 0;
+          const hasChatBadge = id === 'chat' && (typeof (arguments[0]) === 'undefined' ? false : false);
+
+          // Simple chat pending badge detection via prop — fallback to 0
+          const chatBadge = (typeof (arguments[0]) === 'undefined') ? 0 : 0;
 
           return (
             <motion.button
@@ -160,6 +168,17 @@ export function NavBar({ activeSidebar, onToggle, isGhostMode, pendingCount = 0 
                   aria-label={`${pendingCount} permintaan pertemanan`}
                 >
                   {pendingCount}
+                </span>
+              )}
+
+              {/* Chat badge */}
+              {id === 'chat' && chatPendingCount > 0 && !isActive && (
+                <span
+                  className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold border"
+                  style={{ background: 'var(--color-gold)', color: 'var(--color-base)', borderColor: 'var(--color-surface)' }}
+                  aria-label={`${chatPendingCount} pesan belum dibaca`}
+                >
+                  {chatPendingCount}
                 </span>
               )}
 

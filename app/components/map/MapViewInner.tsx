@@ -261,11 +261,11 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
         setCurrentLat(lat);
         setCurrentLng(lng);
 
-        // Upsert into profiles — non-blocking, best-effort
+        // Update profiles — non-blocking, best-effort. Only update existing profile row.
         await supabase
           .from('profiles')
-          .upsert({ id: userId, last_lat: lat, last_lng: lng, updated_at: new Date().toISOString() })
-          .select();
+          .update({ last_lat: lat, last_lng: lng, updated_at: new Date().toISOString() })
+          .eq('id', userId);
       },
       () => {/* permission denied or unavailable — keep DEFAULT_CENTER */},
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }

@@ -30,6 +30,7 @@ import type { Profile } from '@/utils/supabase/types';
 import type { Friend }     from '@/app/components/friends/FriendsPanel';
 import type { ChatFriend } from '@/app/components/chat/ChatPanel';
 import type { User }       from '@supabase/supabase-js';
+import { ChatNotificationsProvider } from '@/app/context/ChatNotifications';
 
 type ActivePanel = 'none' | 'friends' | 'chat' | 'profile';
 
@@ -63,6 +64,7 @@ export default function Home() {
   const [activeChatFriend, setActiveChatFriend] = useState<ChatFriend>({
     id: '', name: 'Friend', avatar: '?', distance: '—',
   });
+  const [chatPendingCount, setChatPendingCount] = useState(0);
 
   // ── Resolve session ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -82,14 +84,8 @@ export default function Home() {
 
       if (profileData) {
         setProfile(profileData as Profile);
-        // Show completion modal ONLY if display_name is genuinely absent in the DB
-        const nameIsEmpty =
-          profileData.display_name === null ||
-          profileData.display_name === undefined ||
-          profileData.display_name.trim() === '';
-        if (nameIsEmpty) {
-          setShowProfileCompletion(true);
-        }
+        // Do NOT auto-show the profile completion modal on refresh.
+        // Users should open profile settings themselves to complete profile data.
         setIsGhostMode(profileData.is_ghost_mode ?? false);
       }
     });
@@ -102,6 +98,15 @@ export default function Home() {
     return () => subscription.unsubscribe();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  
+
+  // Clear chat pending when Chat panel becomes active
+  useEffect(() => {
+    if (activePanel === 'chat') {
+      setChatPendingCount(0);
+    }
+  }, [activePanel]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleLogout = useCallback(async () => {
@@ -121,8 +126,48 @@ export default function Home() {
       distance: friend.distance ?? '< 1 km',
     });
     setActivePanel('chat');
+    // clear pending chat badge when user opens chat
+    setChatPendingCount(0);
     setFocusedProfileId(null);
   }, []);
+
+  // Global incoming messages watcher (for chat badge)
+  useEffect(() => {
+    if (!user) return;
+
+    const ch = supabase
+      .channel(`global-messages-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${user.id}` },
+        async (payload) => {
+          setChatPendingCount((c) => c + 1);
+
+          // Try to open chat automatically and focus the sender if possible
+          try {
+            const senderId = payload.new.sender_id as string;
+            const { data: p } = await supabase
+              .from('profiles')
+              .select('id, username, display_name, avatar_initials, last_lat, last_lng')
+              .eq('id', senderId)
+              .single();
+
+            if (p) {
+              const friend = profileToFriend(p as Profile);
+              // Only auto-open if chat not already open
+              if (activePanel !== 'chat') {
+                openChat(friend);
+              }
+            }
+          } catch (err) {
+            // ignore
+          }
+        }
+      )
+      .subscribe();
+
+    return () => { ch.unsubscribe(); };
+  }, [supabase, user, openChat, activePanel]);
 
   // ── Fly-to-friend: fired by FriendsPanel / ChatPanel ──────────────────────
   const flyToFriend = useCallback((friendId: string) => {
@@ -241,6 +286,7 @@ export default function Home() {
         isGhostMode={isGhostMode}
         pendingCount={pendingCount}
       />
+      {/* ChatNotificationsProvider wraps page at top; no shim needed here. */}
     </div>
   );
 }
