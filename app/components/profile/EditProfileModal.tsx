@@ -12,7 +12,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Loader2, Check } from 'lucide-react';
+import { X, Loader2, Check, Lock } from 'lucide-react';
 import { useToast } from '@/app/components/ui/Toast';
 import { createClient } from '@/utils/supabase/client';
 import type { Profile } from '@/utils/supabase/types';
@@ -21,7 +21,8 @@ interface EditProfileModalProps {
   profile: Profile | null;
   isOpen: boolean;
   onClose: () => void;
-  onSave: () => void;
+  /** Called after successful save. Receives updated fields for optimistic parent update. */
+  onSave: (updated: { display_name: string; avatar_initials: string }) => void;
 }
 
 /** Derive avatar initials strictly from display_name words */
@@ -117,7 +118,7 @@ export function EditProfileModal({
 
     setIsLoading(false);
     setHasChanges(false);
-    onSave();
+    onSave({ display_name: displayName.trim(), avatar_initials: initials });
     onClose();
   }
 
@@ -164,6 +165,30 @@ export function EditProfileModal({
 
             {/* Form */}
             <form onSubmit={handleSave} className="p-4 space-y-4">
+              {/* Username — locked/read-only */}
+              <div>
+                <label
+                  className="block text-xs font-semibold uppercase tracking-widest mb-2"
+                  style={{ color: 'var(--color-muted)' }}
+                >
+                  Username
+                </label>
+                <div
+                  className="w-full px-3 py-2.5 rounded-lg text-sm flex items-center gap-2"
+                  style={{
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid var(--color-border)',
+                    color: 'var(--color-muted)',
+                  }}
+                >
+                  <Lock size={13} style={{ flexShrink: 0 }} />
+                  <span>@{profile?.username ?? '—'}</span>
+                </div>
+                <p className="text-[10px] mt-1" style={{ color: 'var(--color-muted)', opacity: 0.6 }}>
+                  Username tidak dapat diubah
+                </p>
+              </div>
+
               {/* Display Name */}
               <div>
                 <label

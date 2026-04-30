@@ -2,17 +2,12 @@
 
 /**
  * FriendsPanel — Supabase-backed friends & requests list
- * ────────────────────────────────────────────────────────
- * • Fetches confirmed friends (friendships.status = 'accepted')
- * • Fetches incoming pending requests
- * • Search against profiles by username using .ilike('username', '%query%')
- * • Send a friend request (insert into friendships) — .select() surfaces RLS errors
- * • Accept a request (update status to 'accepted') — .select() surfaces RLS errors
- * • Passes pendingCount up to parent for NavBar badge
+ * • Deduplication via reduce on user.id before rendering
+ * • onFlyTo prop: click avatar → map flies to friend's location
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { X, Search, UserPlus, CheckCircle2, BatteryMedium, UserCheck } from 'lucide-react';
+import { X, Search, UserPlus, CheckCircle2, BatteryMedium, UserCheck, MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { FriendListSkeleton } from '@/app/components/ui/Skeletons';
@@ -21,7 +16,6 @@ import { useToast }           from '@/app/components/ui/Toast';
 import { createClient }       from '@/utils/supabase/client';
 import type { Profile }       from '@/utils/supabase/types';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
 export interface Friend {
   id: string;
   name: string;
@@ -30,11 +24,10 @@ export interface Friend {
   distance?: string;
   mutualCount?: number;
   isPending?: boolean;
-  friendshipId?: string;   // used for accept action
+  friendshipId?: string;
   battery?: number;
 }
 
-// ── PingRipple ────────────────────────────────────────────────────────────────
 function PingRipple({ delay = 0 }: { delay?: number }) {
   return (
     <motion.span
@@ -47,7 +40,6 @@ function PingRipple({ delay = 0 }: { delay?: number }) {
   );
 }
 
-// ── BatteryBadge ──────────────────────────────────────────────────────────────
 function BatteryBadge({ pct }: { pct: number }) {
   const color = pct <= 20 ? '#EF4444' : pct <= 40 ? '#F59E0B' : '#2ECC71';
   return (
@@ -58,24 +50,18 @@ function BatteryBadge({ pct }: { pct: number }) {
   );
 }
 
-// ── FriendCard ────────────────────────────────────────────────────────────────
 function FriendCard({
   friend,
   onStartChat,
   onAccept,
+  onFlyTo,
 }: {
   friend: Friend;
   onStartChat?: (friend: Friend) => void;
   onAccept?: (friendshipId: string, friendName: string) => void;
+  onFlyTo?: (id: string) => void;
 }) {
   const [accepted, setAccepted] = useState(false);
-
-  function handleAccept(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (!friend.friendshipId) return;
-    setAccepted(true);
-    onAccept?.(friend.friendshipId, friend.name);
-  }
 
   return (
     <motion.div
@@ -84,7 +70,6 @@ function FriendCard({
       className="flex items-center gap-3 px-3 py-3 rounded-xl transition-colors hover:bg-white/5 group cursor-pointer"
       onClick={() => !friend.isPending && onStartChat?.(friend)}
     >
-      {/* Avatar */}
       <div className="relative flex-shrink-0">
         <div
           className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold"
@@ -104,7 +89,6 @@ function FriendCard({
         />
       </div>
 
-      {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 mb-0.5">
           <p className="text-sm font-semibold truncate" style={{ color: 'var(--color-primary)' }}>
@@ -118,38 +102,55 @@ function FriendCard({
         </p>
       </div>
 
-      {/* Actions */}
       {friend.isPending ? (
         <button
           id={`accept-friend-${friend.id}`}
-          onClick={handleAccept}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!friend.friendshipId) return;
+            setAccepted(true);
+            onAccept?.(friend.friendshipId, friend.name);
+          }}
           className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
           style={
             accepted
               ? { background: 'rgba(46,204,113,0.15)', color: '#2ECC71' }
               : { background: 'var(--color-gold)', color: 'var(--color-base)' }
           }
-          aria-label={accepted ? 'Permintaan diterima' : `Terima permintaan dari ${friend.name}`}
+          aria-label={accepted ? 'Diterima' : `Terima permintaan dari ${friend.name}`}
         >
           {accepted ? <CheckCircle2 size={13} /> : <UserPlus size={13} />}
           {accepted ? 'Diterima' : 'Terima'}
         </button>
       ) : (
-        <button
-          id={`chat-friend-${friend.id}`}
-          onClick={(e) => { e.stopPropagation(); onStartChat?.(friend); }}
-          className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold opacity-0 group-hover:opacity-100 transition-all"
-          style={{ background: 'rgba(252,213,53,0.15)', color: 'var(--color-gold)' }}
-          aria-label={`Obrolan dengan ${friend.name}`}
-        >
-          Obrolan
-        </button>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+          {onFlyTo && (
+            <button
+              id={`flyto-friend-${friend.id}`}
+              onClick={(e) => { e.stopPropagation(); onFlyTo(friend.id); }}
+              className="p-1.5 rounded-lg"
+              style={{ color: 'var(--color-gold)', background: 'rgba(252,213,53,0.12)' }}
+              aria-label={`Lihat ${friend.name} di peta`}
+              title="Lihat di peta"
+            >
+              <MapPin size={13} />
+            </button>
+          )}
+          <button
+            id={`chat-friend-${friend.id}`}
+            onClick={(e) => { e.stopPropagation(); onStartChat?.(friend); }}
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+            style={{ background: 'rgba(252,213,53,0.15)', color: 'var(--color-gold)' }}
+            aria-label={`Obrolan dengan ${friend.name}`}
+          >
+            Obrolan
+          </button>
+        </div>
       )}
     </motion.div>
   );
 }
 
-// ── Search result card ────────────────────────────────────────────────────────
 function SearchResultCard({
   profile,
   currentUserId,
@@ -166,33 +167,25 @@ function SearchResultCard({
 
   async function sendRequest() {
     setSending(true);
-
     const { error } = await supabase
       .from('friendships')
       .insert({ requester_id: currentUserId, addressee_id: profile.id, status: 'pending' })
-      .select(); // .select() surfaces RLS errors immediately
+      .select();
 
     if (error) {
-      // Provide a clearer message for the common "already exists" RLS / unique constraint case
       const msg = error.code === '23505'
         ? 'Permintaan pertemanan sudah terkirim sebelumnya.'
         : error.message;
       toast({ variant: 'error', title: 'Gagal mengirim permintaan', description: msg });
     } else {
       setSent(true);
-      toast({
-        variant: 'success',
-        title: 'Permintaan terkirim!',
-        description: `Permintaan pertemanan dikirim ke ${profile.display_name ?? profile.username}.`,
-      });
+      toast({ variant: 'success', title: 'Permintaan terkirim!', description: `Dikirim ke ${profile.display_name ?? profile.username}.` });
       onRequestSent();
     }
     setSending(false);
   }
 
-  const initials = profile.avatar_initials
-    ?? profile.username?.slice(0, 2).toUpperCase()
-    ?? '??';
+  const initials = profile.avatar_initials ?? profile.username?.slice(0, 2).toUpperCase() ?? '??';
 
   return (
     <motion.div
@@ -210,9 +203,7 @@ function SearchResultCard({
         <p className="text-sm font-semibold truncate" style={{ color: 'var(--color-primary)' }}>
           {profile.display_name ?? profile.username ?? 'Unknown'}
         </p>
-        <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
-          @{profile.username}
-        </p>
+        <p className="text-xs" style={{ color: 'var(--color-muted)' }}>@{profile.username}</p>
       </div>
       <button
         id={`add-friend-${profile.id}`}
@@ -224,7 +215,7 @@ function SearchResultCard({
             ? { background: 'rgba(46,204,113,0.15)', color: '#2ECC71' }
             : { background: 'var(--color-gold)', color: 'var(--color-base)' }
         }
-        aria-label={sent ? 'Permintaan terkirim' : `Tambah teman ${profile.username}`}
+        aria-label={sent ? 'Terkirim' : `Tambah ${profile.username}`}
       >
         {sent ? <UserCheck size={13} /> : <UserPlus size={13} />}
         {sent ? 'Terkirim' : 'Tambah'}
@@ -233,12 +224,12 @@ function SearchResultCard({
   );
 }
 
-// ── FriendsPanel ──────────────────────────────────────────────────────────────
 interface FriendsPanelProps {
   currentUserId: string;
   onClose: () => void;
   onStartChat: (friend: Friend) => void;
   onPendingCountChange: (count: number) => void;
+  onFlyTo?: (friendId: string) => void;
 }
 
 export function FriendsPanel({
@@ -246,24 +237,22 @@ export function FriendsPanel({
   onClose,
   onStartChat,
   onPendingCountChange,
+  onFlyTo,
 }: FriendsPanelProps) {
-  const supabase   = createClient();
-  const { toast }  = useToast();
+  const supabase  = createClient();
+  const { toast } = useToast();
 
-  const [activeTab, setActiveTab]   = useState<'friends' | 'requests'>('friends');
-  const [search,    setSearch]      = useState('');
-  const [isLoading, setIsLoading]   = useState(true);
-
-  const [friends,   setFriends]     = useState<Friend[]>([]);
-  const [requests,  setRequests]    = useState<Friend[]>([]);
+  const [activeTab,     setActiveTab]     = useState<'friends' | 'requests'>('friends');
+  const [search,        setSearch]        = useState('');
+  const [isLoading,     setIsLoading]     = useState(true);
+  const [friends,       setFriends]       = useState<Friend[]>([]);
+  const [requests,      setRequests]      = useState<Friend[]>([]);
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
-  const [searching, setSearching]   = useState(false);
+  const [searching,     setSearching]     = useState(false);
 
-  // ── Load friends + requests ────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     setIsLoading(true);
 
-    // Accepted friendships — fetch both directions
     const { data: acceptedRows } = await supabase
       .from('friendships')
       .select(`
@@ -274,7 +263,6 @@ export function FriendsPanel({
       .eq('status', 'accepted')
       .or(`requester_id.eq.${currentUserId},addressee_id.eq.${currentUserId}`);
 
-    // Pending requests where I am the addressee
     const { data: pendingRows } = await supabase
       .from('friendships')
       .select(`
@@ -293,13 +281,19 @@ export function FriendsPanel({
       friendshipId: row.id as string,
     });
 
-    const friendList: Friend[] = (acceptedRows ?? []).map((row) => {
+    const rawFriends: Friend[] = (acceptedRows ?? []).map((row) => {
       const isRequester = (row.requester_id as string) === currentUserId;
       const profile = isRequester
         ? (row.addressee as unknown as Profile)
         : (row.requester as unknown as Profile);
       return toFriend(row as Record<string, unknown>, profile, false);
     });
+
+    // ── Deduplicate by user id ─────────────────────────────────────────────
+    const friendList = rawFriends.reduce<Friend[]>((acc, f) => {
+      if (!acc.some((x) => x.id === f.id)) acc.push(f);
+      return acc;
+    }, []);
 
     const requestList: Friend[] = (pendingRows ?? []).map((row) => {
       const profile = row.requester as unknown as Profile;
@@ -314,42 +308,33 @@ export function FriendsPanel({
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // ── Search profiles (debounced) — uses ilike on username only ─────────────
   useEffect(() => {
     if (!search.trim()) { setSearchResults([]); return; }
-
     const t = setTimeout(async () => {
       setSearching(true);
       const { data } = await supabase
         .from('profiles')
         .select('id, username, display_name, avatar_initials, last_lat, last_lng')
-        .ilike('username', `%${search.trim()}%`)  // single-column ilike per mandate
+        .ilike('username', `%${search.trim()}%`)
         .neq('id', currentUserId)
         .limit(8);
-
       setSearchResults((data ?? []) as Profile[]);
       setSearching(false);
     }, 350);
-
     return () => clearTimeout(t);
   }, [search, supabase, currentUserId]);
 
-  // ── Accept friend request ──────────────────────────────────────────────────
   async function handleAccept(friendshipId: string, friendName: string) {
     const { error } = await supabase
       .from('friendships')
       .update({ status: 'accepted' })
       .eq('id', friendshipId)
-      .select(); // surfaces RLS errors
+      .select();
 
     if (error) {
       toast({ variant: 'error', title: 'Gagal menerima permintaan', description: error.message });
     } else {
-      toast({
-        variant: 'success',
-        title: `${friendName} ditambahkan!`,
-        description: 'Sekarang kalian bisa saling melihat di peta.',
-      });
+      toast({ variant: 'success', title: `${friendName} ditambahkan!`, description: 'Kalian bisa saling melihat di peta.' });
       loadData();
     }
   }
@@ -360,34 +345,21 @@ export function FriendsPanel({
   return (
     <motion.aside
       key="friends-panel"
-      initial={{ x: '-100%' }}
-      animate={{ x: 0 }}
-      exit={{ x: '-100%' }}
+      initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }}
       transition={{ type: 'spring', damping: 28, stiffness: 260 }}
       className="fixed top-0 left-0 h-full flex flex-col z-30 bg-[#181A20]/80 backdrop-blur-xl border-r border-white/5"
       style={{ width: 'clamp(300px, 360px, 100vw)' }}
       aria-label="Friends panel"
     >
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
         <h2 className="text-base font-bold" style={{ color: 'var(--color-primary)' }}>Teman</h2>
-        <button
-          id="close-friends-panel"
-          onClick={onClose}
-          className="p-1.5 rounded-lg transition-colors hover:bg-white/5"
-          style={{ color: 'var(--color-muted)' }}
-          aria-label="Tutup panel teman"
-        >
+        <button id="close-friends-panel" onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/5" style={{ color: 'var(--color-muted)' }} aria-label="Tutup panel teman">
           <X size={18} />
         </button>
       </div>
 
-      {/* Search */}
       <div className="px-4 pt-3 pb-2">
-        <div
-          className="flex items-center gap-2 px-3 py-2 rounded-xl"
-          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--color-border)' }}
-        >
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--color-border)' }}>
           <Search size={15} style={{ color: 'var(--color-muted)' }} />
           <input
             id="friends-search"
@@ -402,45 +374,33 @@ export function FriendsPanel({
         </div>
       </div>
 
-      {/* Tabs — hidden when searching */}
       {!isSearchMode && (
-        <div
-          className="flex mx-4 mb-2 rounded-xl overflow-hidden"
-          style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--color-border)' }}
-          role="tablist"
-        >
-          {(['friends', 'requests'] as const).map((tab) => { const tabLabel = tab === 'friends' ? 'Teman' : 'Permintaan'; return (
-            <button
-              key={tab}
-              id={`friends-tab-${tab}`}
-              role="tab"
-              aria-selected={activeTab === tab}
-              onClick={() => setActiveTab(tab)}
-              className="flex-1 py-2 text-xs font-semibold capitalize rounded-xl transition-all"
-              style={
-                activeTab === tab
-                  ? { background: 'var(--color-gold)', color: 'var(--color-base)' }
-                  : { color: 'var(--color-muted)' }
-              }
-            >
-              {tabLabel}
-              {tab === 'requests' && requests.length > 0 && (
-                <span
-                  className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px]"
-                  style={{
-                    background: activeTab === tab ? 'var(--color-base)' : 'var(--color-gold)',
-                    color:      activeTab === tab ? 'var(--color-gold)' : 'var(--color-base)',
-                  }}
-                >
-                  {requests.length}
-                </span>
-              )}
-            </button>
-          ); })}
+        <div className="flex mx-4 mb-2 rounded-xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--color-border)' }} role="tablist">
+          {(['friends', 'requests'] as const).map((tab) => {
+            const tabLabel = tab === 'friends' ? 'Teman' : 'Permintaan';
+            return (
+              <button
+                key={tab}
+                id={`friends-tab-${tab}`}
+                role="tab"
+                aria-selected={activeTab === tab}
+                onClick={() => setActiveTab(tab)}
+                className="flex-1 py-2 text-xs font-semibold capitalize rounded-xl transition-all"
+                style={activeTab === tab ? { background: 'var(--color-gold)', color: 'var(--color-base)' } : { color: 'var(--color-muted)' }}
+              >
+                {tabLabel}
+                {tab === 'requests' && requests.length > 0 && (
+                  <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px]"
+                    style={{ background: activeTab === tab ? 'var(--color-base)' : 'var(--color-gold)', color: activeTab === tab ? 'var(--color-gold)' : 'var(--color-base)' }}>
+                    {requests.length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* List / Search results / Skeleton / Empty */}
       <div className="flex-1 overflow-y-auto px-2 py-2">
         <AnimatePresence mode="wait">
           {isSearchMode ? (
@@ -450,12 +410,7 @@ export function FriendsPanel({
               ) : searchResults.length === 0 ? (
                 <p className="text-center text-xs py-6" style={{ color: 'var(--color-muted)' }}>Pengguna tidak ditemukan</p>
               ) : searchResults.map((p) => (
-                <SearchResultCard
-                  key={p.id}
-                  profile={p}
-                  currentUserId={currentUserId}
-                  onRequestSent={loadData}
-                />
+                <SearchResultCard key={p.id} profile={p} currentUserId={currentUserId} onRequestSent={loadData} />
               ))}
             </motion.div>
           ) : isLoading ? (
@@ -467,12 +422,7 @@ export function FriendsPanel({
           ) : (
             <motion.div key={activeTab} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               {list.map((f) => (
-                <FriendCard
-                  key={f.id}
-                  friend={f}
-                  onStartChat={onStartChat}
-                  onAccept={handleAccept}
-                />
+                <FriendCard key={f.id} friend={f} onStartChat={onStartChat} onAccept={handleAccept} onFlyTo={onFlyTo} />
               ))}
             </motion.div>
           )}
@@ -483,5 +433,4 @@ export function FriendsPanel({
 }
 
 export { type Friend as FriendType };
-// Legacy export for page.tsx compatibility
 export const MUTUALS: Friend[] = [];

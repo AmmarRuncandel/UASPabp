@@ -82,8 +82,12 @@ export default function Home() {
 
       if (profileData) {
         setProfile(profileData as Profile);
-        // Show completion modal if display_name is empty
-        if (!profileData.display_name) {
+        // Show completion modal ONLY if display_name is genuinely absent in the DB
+        const nameIsEmpty =
+          profileData.display_name === null ||
+          profileData.display_name === undefined ||
+          profileData.display_name.trim() === '';
+        if (nameIsEmpty) {
           setShowProfileCompletion(true);
         }
         setIsGhostMode(profileData.is_ghost_mode ?? false);
@@ -118,6 +122,12 @@ export default function Home() {
     });
     setActivePanel('chat');
     setFocusedProfileId(null);
+  }, []);
+
+  // ── Fly-to-friend: fired by FriendsPanel / ChatPanel ──────────────────────
+  const flyToFriend = useCallback((friendId: string) => {
+    setFocusedProfileId(friendId);
+    setActivePanel('none'); // close panel so map is visible
   }, []);
 
   useEffect(() => {
@@ -196,6 +206,7 @@ export default function Home() {
             currentUserId={user.id}
             onClose={() => setActivePanel('none')}
             onStartChat={openChat}
+            onFlyTo={flyToFriend}
             onPendingCountChange={setPendingCount}
           />
         )}
@@ -206,6 +217,7 @@ export default function Home() {
             friend={activeChatFriend}
             currentUserId={user.id}
             onClose={() => setActivePanel('none')}
+            onOpenFriends={() => setActivePanel('friends')}
           />
         )}
 

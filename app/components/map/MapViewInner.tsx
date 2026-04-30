@@ -189,6 +189,22 @@ function MapControls({
   );
 }
 
+// ── FlyToController — flies to focusTarget inside MapContainer context ─────────
+function FlyToController({ target }: { target: [number, number] | null }) {
+  const map = useMap();
+  const prevTarget = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!target) return;
+    const key = target.join(',');
+    if (key === prevTarget.current) return;
+    prevTarget.current = key;
+    map.flyTo(target, 16, { duration: 1.4 });
+  }, [map, target]);
+
+  return null;
+}
+
 // ── Main exported component ────────────────────────────────────────────────────
 export interface MapViewInnerProps {
   isGhostMode: boolean;
@@ -203,6 +219,7 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
   const [visibleUsers,  setVisibleUsers]  = useState<VisibleUser[]>([]);
   const [currentLat,    setCurrentLat]    = useState<number | null>(null);
   const [currentLng,    setCurrentLng]    = useState<number | null>(null);
+  const [flyTarget,     setFlyTarget]     = useState<[number, number] | null>(null);
 
   // Track previous ghost mode to detect the transition OFF → ON
   const prevGhostRef = useRef(isGhostMode);
@@ -290,14 +307,12 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
     return () => clearInterval(interval);
   }, [fetchVisibleUsers]);
 
-  // ── Focus on a specific profile (from FriendsPanel / CommandMenu) ──────────
+  // ── Focus on a specific profile → flyTo at zoom 16 ──────────────────────────
   useEffect(() => {
     if (!focusProfileId) return;
-
     const focused = visibleUsers.find((u) => u.id === focusProfileId);
     if (!focused) return;
-
-    setUserPos([focused.last_lat, focused.last_lng]);
+    setFlyTarget([focused.last_lat, focused.last_lng]);
   }, [focusProfileId, visibleUsers]);
 
   // ── Build friend icons (stable, memo-ised per id) ──────────────────────────
@@ -365,9 +380,10 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
         })}
 
         {/* Map controls inside context */}
+        <FlyToController target={flyTarget} />
         <MapControls
           isGhostMode={isGhostMode}
-          nearbyCount={visibleUsers.length}
+          nearbyCount={visibleUsers.filter((u) => u.relation_type !== 'friend').length}
           userCenter={userPos}
         />
       </MapContainer>

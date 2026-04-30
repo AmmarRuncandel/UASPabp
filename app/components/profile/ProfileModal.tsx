@@ -2,6 +2,9 @@
 
 /**
  * ProfileModal — Tampilan profil pengguna nyata dari Supabase
+ * • lastSeenText: green Online jika < 5 menit, otherwise relative time
+ * • Settings row dihapus
+ * • Copy Profile Link di bawah QR code
  * ─────────────────────────────────────────────────────────────
  * • Mengambil data pengguna dari auth.getUser() + tabel profiles
  * • Avatar inisial dihasilkan dari kata pertama & terakhir display_name
@@ -15,7 +18,7 @@
 import { useEffect, useState } from 'react';
 import {
   X, Eye, EyeOff, LogOut, MapPin, Bell, ShieldCheck, Nfc,
-  ScanLine, Settings, Loader2, Edit2,
+  ScanLine, Loader2, Edit2, Copy, Check,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
@@ -112,16 +115,15 @@ export function ProfileModal({
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
   const [togglingGhost, setTogglingGhost] = useState(false);
+  const [linkCopied,    setLinkCopied]    = useState(false);
 
-  function lastSeenText(updatedAt: string | null | undefined) {
-    if (!updatedAt) return '—';
-    const then = new Date(updatedAt).getTime();
-    const now = Date.now();
-    const diff = Math.max(0, Math.floor((now - then) / 1000));
-    if (diff < 60) return 'Online sekarang';
-    if (diff < 3600) return `Terakhir aktif ${Math.floor(diff / 60)} menit lalu`;
-    if (diff < 86400) return `Terakhir aktif ${Math.floor(diff / 3600)} jam lalu`;
-    return `Terakhir aktif ${Math.floor(diff / 86400)} hari lalu`;
+  function lastSeenText(updatedAt: string | null | undefined): { text: string; online: boolean } {
+    if (!updatedAt) return { text: '—', online: false };
+    const diff = Math.max(0, Math.floor((Date.now() - new Date(updatedAt).getTime()) / 1000));
+    if (diff < 300) return { text: '🟢 Online', online: true };  // within 5 minutes
+    if (diff < 3600) return { text: `Aktif ${Math.floor(diff / 60)} menit lalu`, online: false };
+    if (diff < 86400) return { text: `Aktif ${Math.floor(diff / 3600)} jam lalu`, online: false };
+    return { text: `Aktif ${Math.floor(diff / 86400)} hari lalu`, online: false };
   }
 
   // ── Fetch real user data ───────────────────────────────────────────────────
@@ -167,17 +169,28 @@ export function ProfileModal({
   }
 
   useEffect(() => {
-    // compute online-now based on profile.updated_at; refresh every 30s
+    // Recompute online status every 30 s (threshold: 5 minutes)
     function updateOnline() {
       const updated = profile?.updated_at ?? null;
       if (!updated) { setIsOnlineNow(false); return; }
-      const then = new Date(updated).getTime();
-      setIsOnlineNow(Date.now() - then < 60_000);
+      setIsOnlineNow(Date.now() - new Date(updated).getTime() < 300_000);
     }
     updateOnline();
     const iv = setInterval(updateOnline, 30_000);
     return () => clearInterval(iv);
   }, [profile?.updated_at]);
+
+  async function handleCopyLink() {
+    if (!userId) return;
+    try {
+      await navigator.clipboard.writeText(`https://zmayy.com/u/${userId}`);
+      setLinkCopied(true);
+      toast({ variant: 'success', title: 'Tautan disalin!', description: 'Tautan profil berhasil disalin ke clipboard.' });
+      setTimeout(() => setLinkCopied(false), 2500);
+    } catch {
+      toast({ variant: 'error', title: 'Gagal menyalin', description: 'Browser tidak mendukung clipboard.' });
+    }
+  }
 
   // ── Ghost mode toggle ──────────────────────────────────────────────────────
   async function handleToggleGhost() {
@@ -372,7 +385,7 @@ export function ProfileModal({
 
           {/* Last seen / Online */}
           <p className="text-xs mt-1" style={{ color: isOnlineNow ? '#2ECC71' : 'var(--color-muted)' }}>
-            {loadingUser ? '—' : lastSeenText(profile?.updated_at)}
+            {loadingUser ? '—' : lastSeenText(profile?.updated_at).text}
           </p>
         </div>
 
@@ -441,13 +454,6 @@ export function ProfileModal({
             subtitle="Kelola data & pemblokiran"
             onClick={() => setIsPrivacyOpen(true)}
           />
-          <SettingRow
-            id="profile-settings-btn"
-            Icon={Settings}
-            title="Pengaturan"
-            subtitle="Bahasa, tema, dan lainnya"
-            onClick={() => toast({ variant: 'info', title: 'Pengaturan lanjutan', description: 'Menu pengaturan lebih banyak tersedia di versi berikutnya.' })}
-          />
         </div>
 
         <div style={{ height: '1px', background: 'var(--color-border)' }} />
@@ -493,6 +499,19 @@ export function ProfileModal({
               <p className="text-sm font-semibold mb-1" style={{ color: 'var(--color-primary)' }}>
                 @{username}
               </p>
+              {/* Copy Profile Link */}
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+                onClick={handleCopyLink}
+                className="inline-flex items-center gap-1.5 mb-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer select-none"
+                style={{ background: linkCopied ? 'rgba(46,204,113,0.15)' : 'rgba(255,255,255,0.06)', border: '1px solid var(--color-border)', color: linkCopied ? '#2ECC71' : 'var(--color-muted)' }}
+                aria-label="Salin tautan profil"
+                id="copy-profile-link-btn"
+              >
+                {linkCopied ? <Check size={11} /> : <Copy size={11} />}
+                {linkCopied ? 'Disalin!' : 'Salin Tautan Profil'}
+              </motion.button>
               <p className="text-xs leading-relaxed" style={{ color: 'var(--color-muted)' }}>
                 Pindai dengan{' '}
                 <span style={{ color: '#FCD535' }}>Zmayy Mobile</span>{' '}
@@ -540,17 +559,11 @@ export function ProfileModal({
         profile={profile}
         isOpen={isEditOpen}
         onClose={() => setIsEditOpen(false)}
-        onSave={() => {
-          // Refresh profile data after save
-          async function refresh() {
-            const { data } = await supabase
-              .from('profiles')
-              .select('*')
-              .eq('id', userId)
-              .single();
-            if (data) setProfile(data as Profile);
-          }
-          refresh();
+        onSave={({ display_name, avatar_initials }) => {
+          // Optimistic update — no refetch needed
+          setProfile((p) =>
+            p ? { ...p, display_name, avatar_initials } : p
+          );
         }}
       />
 
