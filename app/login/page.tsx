@@ -238,7 +238,7 @@ export default function LoginPage() {
                 type="email"
                 value={email}
                 onChange={(v) => { setEmail(v); setError(null); }}
-                placeholder="nama@contoh.com"
+                placeholder="Masukkan email"
                 autoComplete="email"
                 hasError={!!error}
               />
@@ -249,7 +249,7 @@ export default function LoginPage() {
                 type={showPw ? 'text' : 'password'}
                 value={password}
                 onChange={(v) => { setPassword(v); setError(null); }}
-                placeholder={mode === 'signup' ? 'Minimal 6 karakter' : '••••••••'}
+                placeholder={mode === 'signup' ? 'Minimal 6 karakter' : 'Masukan kata sandi'}
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 hasError={!!error}
                 trailing={

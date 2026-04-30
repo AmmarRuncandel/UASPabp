@@ -14,7 +14,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Zmayy — Social Mapping & Real-Time Chat",
+  title: "Zmayy Social Mapping App",
   description:
     "Zmayy is a premium social mapping application. Discover friends near you, share your location, and chat in real time.",
   icons: {
