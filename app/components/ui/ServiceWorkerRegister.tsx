@@ -24,7 +24,7 @@ export function ServiceWorkerRegister() {
         });
 
       // Handle service worker updates
-      let updateCheckTimer: NodeJS.Timeout;
+      let updateCheckTimer: ReturnType<typeof setTimeout> | null = null;
       const checkUpdate = () => {
         if (navigator.serviceWorker.controller) {
           navigator.serviceWorker.controller.postMessage({
@@ -34,7 +34,9 @@ export function ServiceWorkerRegister() {
       };
 
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        clearTimeout(updateCheckTimer);
+        if (updateCheckTimer) {
+          clearTimeout(updateCheckTimer);
+        }
         console.log('[SW] New service worker activated');
       });
     }
