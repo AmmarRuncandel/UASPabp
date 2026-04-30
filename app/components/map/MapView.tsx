@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 export interface MapViewProps {
   isGhostMode: boolean;
   userId: string;
+  focusProfileId?: string | null;
 }
 
 const MapViewInner = dynamic(
@@ -24,6 +25,6 @@ const MapViewInner = dynamic(
   }
 );
 
-export function MapView({ isGhostMode, userId }: MapViewProps) {
-  return <MapViewInner isGhostMode={isGhostMode} userId={userId} />;
+export function MapView({ isGhostMode, userId, focusProfileId }: MapViewProps) {
+  return <MapViewInner isGhostMode={isGhostMode} userId={userId} focusProfileId={focusProfileId} />;
 }

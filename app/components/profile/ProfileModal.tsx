@@ -21,6 +21,14 @@ import { useSound }        from '@/app/hooks/useSound';
 import { createClient }    from '@/utils/supabase/client';
 import type { Profile }    from '@/utils/supabase/types';
 
+type NFCWriter = {
+  write: (data: string) => Promise<void>;
+};
+
+type NFCWindow = Window & {
+  NDEFReader?: new () => NFCWriter;
+};
+
 interface ProfileModalProps {
   isGhostMode: boolean;
   onToggleGhost: () => void;
@@ -78,6 +86,18 @@ export function ProfileModal({
   const [userId,        setUserId]        = useState<string | null>(null);
   const [loadingUser,   setLoadingUser]   = useState(true);
   const [loggingOut,    setLoggingOut]    = useState(false);
+  const [isOnlineNow,   setIsOnlineNow]   = useState(false);
+
+  function lastSeenText(updatedAt: string | null | undefined) {
+    if (!updatedAt) return '—';
+    const then = new Date(updatedAt).getTime();
+    const now = Date.now();
+    const diff = Math.max(0, Math.floor((now - then) / 1000));
+    if (diff < 60) return 'Online sekarang';
+    if (diff < 3600) return `Terakhir aktif ${Math.floor(diff / 60)} menit lalu`;
+    if (diff < 86400) return `Terakhir aktif ${Math.floor(diff / 3600)} jam lalu`;
+    return `Terakhir aktif ${Math.floor(diff / 86400)} hari lalu`;
+  }
 
   // ── Fetch real user data ───────────────────────────────────────────────────
   useEffect(() => {
@@ -112,6 +132,19 @@ export function ProfileModal({
     : 'https://zmayy.com';
   const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(qrData)}&bgcolor=FFFFFF&color=0B0E11&margin=4`;
 
+  useEffect(() => {
+    // compute online-now based on profile.updated_at; refresh every 30s
+    function updateOnline() {
+      const updated = profile?.updated_at ?? null;
+      if (!updated) { setIsOnlineNow(false); return; }
+      const then = new Date(updated).getTime();
+      setIsOnlineNow(Date.now() - then < 60_000);
+    }
+    updateOnline();
+    const iv = setInterval(updateOnline, 30_000);
+    return () => clearInterval(iv);
+  }, [profile?.updated_at]);
+
   // ── Ghost mode toggle ──────────────────────────────────────────────────────
   function handleToggleGhost() {
     const next = !isGhostMode;
@@ -123,6 +156,54 @@ export function ProfileModal({
         : { variant: 'info',    title: 'Mode Hantu Nonaktif', description: 'Lokasimu kini terlihat oleh teman.' }
     );
   }
+
+    async function handleShareViaNfc() {
+      const targetUrl = qrData;
+
+      try {
+        if (typeof window !== 'undefined' && 'NDEFReader' in window && (window as NFCWindow).NDEFReader) {
+          const reader = new (window as NFCWindow).NDEFReader!();
+          await reader.write(targetUrl);
+          toast({
+            variant: 'success',
+            title: 'NFC siap digunakan',
+            description: 'Tempelkan perangkat ke tag NFC untuk menulis tautan profil.',
+          });
+          return;
+        }
+
+        if (navigator.share) {
+          await navigator.share({
+            title: 'Profil Zmayy',
+            text: `Lihat profil ${displayName}`,
+            url: targetUrl,
+          });
+          return;
+        }
+
+        await navigator.clipboard.writeText(targetUrl);
+        toast({
+          variant: 'info',
+          title: 'Tautan profil disalin',
+          description: 'Perangkat ini belum mendukung NFC, jadi tautan profil disalin ke clipboard.',
+        });
+      } catch {
+        try {
+          await navigator.clipboard.writeText(targetUrl);
+          toast({
+            variant: 'warning',
+            title: 'NFC tidak tersedia',
+            description: 'Tautan profil disalin sebagai cadangan.',
+          });
+        } catch {
+          toast({
+            variant: 'error',
+            title: 'Gagal membagikan profil',
+            description: 'Coba lagi di browser yang mendukung Web NFC atau gunakan QR code.',
+          });
+        }
+      }
+    }
 
   // ── Logout ─────────────────────────────────────────────────────────────────
   async function handleLogout() {
@@ -199,6 +280,11 @@ export function ProfileModal({
           {email && !loadingUser && (
             <p className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>{email}</p>
           )}
+
+          {/* Last seen / Online */}
+          <p className="text-xs mt-1" style={{ color: isOnlineNow ? '#2ECC71' : 'var(--color-muted)' }}>
+            {loadingUser ? '—' : lastSeenText(profile?.updated_at)}
+          </p>
         </div>
 
         <div style={{ height: '1px', background: 'var(--color-border)' }} />
@@ -245,24 +331,28 @@ export function ProfileModal({
             Icon={MapPin}
             title="Berbagi Lokasi"
             subtitle="Hanya teman"
+            onClick={() => toast({ variant: 'info', title: 'Berbagi lokasi', description: 'Pengaturan ini akan aktif setelah logika privasi lokasi selesai dihubungkan.' })}
           />
           <SettingRow
             id="profile-notifications-btn"
             Icon={Bell}
             title="Notifikasi"
             subtitle="Semua aktif"
+            onClick={() => toast({ variant: 'info', title: 'Notifikasi', description: 'Panel pengaturan notifikasi sedang disiapkan.' })}
           />
           <SettingRow
             id="profile-privacy-btn"
             Icon={ShieldCheck}
             title="Privasi &amp; Keamanan"
             subtitle="Kelola data &amp; pemblokiran"
+            onClick={() => toast({ variant: 'info', title: 'Privasi & keamanan', description: 'Pengaturan detail privasi akan menyusul setelah lapisan data siap.' })}
           />
           <SettingRow
             id="profile-settings-btn"
             Icon={Settings}
             title="Pengaturan"
             subtitle="Bahasa, tema, dan lainnya"
+            onClick={() => toast({ variant: 'info', title: 'Pengaturan', description: 'Menu pengaturan lengkap belum dibuka, jadi row ini menampilkan status saat ini.' })}
           />
         </div>
 
@@ -315,16 +405,17 @@ export function ProfileModal({
                 atau ketuk ponsel melalui{' '}
                 <span style={{ color: '#FCD535' }}>NFC</span>.
               </p>
-              <motion.div
+              <motion.button
+                type="button"
                 whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
                 className="inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer select-none"
                 style={{ background: 'rgba(252,213,53,0.10)', border: '1px solid rgba(252,213,53,0.3)', color: '#FCD535' }}
-                role="button"
                 aria-label="Ketuk untuk berbagi via NFC"
+                onClick={handleShareViaNfc}
               >
                 <Nfc size={12} />
                 Bagikan via NFC
-              </motion.div>
+              </motion.button>
             </div>
           </div>
         </div>

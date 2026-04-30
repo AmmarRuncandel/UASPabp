@@ -12,6 +12,14 @@ import { Search, X, MessageCircle, MapPin } from 'lucide-react';
 import { createClient } from '@/utils/supabase/client';
 import type { Profile } from '@/utils/supabase/types';
 
+type CommandAction = 'chat' | 'map';
+
+function emitCommandAction(action: CommandAction, profile: Profile) {
+  window.dispatchEvent(new CustomEvent('zmayy:command-action', {
+    detail: { action, profile },
+  }));
+}
+
 export function CommandMenu() {
   const supabase = createClient();
 
@@ -65,6 +73,11 @@ export function CommandMenu() {
     return p.avatar_initials ?? p.username?.slice(0, 2).toUpperCase() ?? '??';
   }
 
+  function handleProfileAction(action: CommandAction, profile: Profile) {
+    emitCommandAction(action, profile);
+    setOpen(false);
+  }
+
   return (
     <AnimatePresence>
       {open && (
@@ -108,33 +121,57 @@ export function CommandMenu() {
               ) : results.length === 0 ? (
                 <p className="text-center text-xs py-6" style={{ color: 'rgba(255,255,255,0.3)' }}>Ketik untuk mencari pengguna</p>
               ) : results.map((p, i) => (
-                <motion.button key={p.id}
+                <motion.div
+                  key={p.id}
                   whileHover={{ background: 'rgba(252,213,53,0.06)' }}
-                  onClick={() => setOpen(false)}
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-left"
                   style={{ background: active === i ? 'rgba(252,213,53,0.08)' : 'transparent', borderLeft: active === i ? '2px solid #FCD535' : '2px solid transparent' }}
                   onMouseEnter={() => setActive(i)}
-                  role="option" aria-selected={active === i}>
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0" style={{ background: '#FCD535', color: '#0B0E11' }}>
-                    {getInitials(p)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate" style={{ color: '#F0F0F0' }}>
-                      {p.display_name ?? p.username ?? 'User'}
-                    </p>
-                    <p className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>
-                      @{p.username} · {p.last_lat !== null ? 'Aktif baru-baru ini' : 'Tidak aktif'}
-                    </p>
-                  </div>
-                  <div className="flex gap-1.5">
-                    <span className="p-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(252,213,53,0.7)' }} title="Pesan">
+                  role="option"
+                  aria-selected={active === i}
+                >
+                  <button
+                    type="button"
+                    className="flex flex-1 items-center gap-3 text-left min-w-0"
+                    onClick={() => handleProfileAction('map', p)}
+                    aria-label={`Lihat ${p.display_name ?? p.username ?? 'pengguna'} di peta`}
+                  >
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0" style={{ background: '#FCD535', color: '#0B0E11' }}>
+                      {getInitials(p)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold truncate" style={{ color: '#F0F0F0' }}>
+                        {p.display_name ?? p.username ?? 'User'}
+                      </p>
+                      <p className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                        @{p.username} · {p.last_lat !== null ? 'Aktif baru-baru ini' : 'Tidak aktif'}
+                      </p>
+                    </div>
+                  </button>
+
+                  <div className="flex gap-1.5 flex-shrink-0">
+                    <button
+                      type="button"
+                      className="p-1.5 rounded-lg"
+                      style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(252,213,53,0.7)' }}
+                      title="Pesan"
+                      aria-label={`Mulai chat dengan ${p.display_name ?? p.username ?? 'pengguna'}`}
+                      onClick={() => handleProfileAction('chat', p)}
+                    >
                       <MessageCircle size={12} />
-                    </span>
-                    <span className="p-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(252,213,53,0.7)' }} title="Lihat di peta">
+                    </button>
+                    <button
+                      type="button"
+                      className="p-1.5 rounded-lg"
+                      style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(252,213,53,0.7)' }}
+                      title="Lihat di peta"
+                      aria-label={`Fokuskan ${p.display_name ?? p.username ?? 'pengguna'} di peta`}
+                      onClick={() => handleProfileAction('map', p)}
+                    >
                       <MapPin size={12} />
-                    </span>
+                    </button>
                   </div>
-                </motion.button>
+                </motion.div>
               ))}
             </div>
 

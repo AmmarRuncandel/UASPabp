@@ -1,8 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Users, MessageCircle, User, Download, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useToast } from '@/app/components/ui/Toast';
+
+// ── BeforeInstallPromptEvent type ──────────────────────────────────────────────
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
 
 type ActiveSidebar = 'none' | 'friends' | 'chat' | 'profile';
 
@@ -20,7 +27,36 @@ const NAV_ITEMS = [
 ] as const;
 
 export function NavBar({ activeSidebar, onToggle, isGhostMode, pendingCount = 0 }: NavBarProps) {
+  const { toast } = useToast();
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(true);
+
+  useEffect(() => {
+    function handleBeforeInstallPrompt(event: Event) {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+      setShowInstallBanner(true);
+    }
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
+
+  async function handleInstallClick() {
+    if (!installPrompt) {
+      toast({
+        variant: 'info',
+        title: 'Instalasi aplikasi belum siap',
+        description: 'Tambahkan manifest dan service worker untuk mengaktifkan instalasi PWA di browser.',
+      });
+      return;
+    }
+
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
+    setShowInstallBanner(false);
+  }
 
   return (
     <>
@@ -44,10 +80,7 @@ export function NavBar({ activeSidebar, onToggle, isGhostMode, pendingCount = 0 
               id="pwa-install-btn"
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              onClick={() => {
-                /* Production: trigger deferred BeforeInstallPromptEvent here */
-                setShowInstallBanner(false);
-              }}
+              onClick={handleInstallClick}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold border transition-all"
               style={{
                 borderColor:    'rgba(252,213,53,0.7)',

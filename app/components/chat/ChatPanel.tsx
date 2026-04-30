@@ -109,7 +109,9 @@ export function ChatPanel({ friend, currentUserId, onClose }: ChatPanelProps) {
   const [isTalking,  setIsTalking]  = useState(false);
   // null = idle before first fetch, true = fetching, false = done
   const [isLoading,  setIsLoading]  = useState<boolean | null>(null);
-  const [isTyping,   setIsTyping]   = useState(false);
+  const [isTyping,   setIsTyping]   = useState(false); // remote typing indicator
+  const emitTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearRemoteTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const bottomRef   = useRef<HTMLDivElement>(null);
   const panelRef    = useRef<HTMLElement>(null);
@@ -193,6 +195,41 @@ export function ChatPanel({ friend, currentUserId, onClose }: ChatPanelProps) {
   }, []);
 
   useEffect(() => () => { if (typingTimer.current) clearTimeout(typingTimer.current); }, []);
+
+  // ── Typing events: listen for custom events and storage events (inter-tab) ──
+  useEffect(() => {
+    function handleTypingEvent(e: Event) {
+      const data = (e as CustomEvent)?.detail;
+      if (!data) return;
+      // Only react if the typing event is from the friend to the current user
+      if (data.from === friend.id && data.to === currentUserId) {
+        setIsTyping(Boolean(data.typing));
+        if (clearRemoteTypingTimer.current) clearTimeout(clearRemoteTypingTimer.current);
+        if (data.typing) {
+          clearRemoteTypingTimer.current = setTimeout(() => setIsTyping(false), 3500);
+        }
+      }
+    }
+
+    function handleStorage(e: StorageEvent) {
+      if (e.key !== 'zmayy:typing') return;
+      try {
+        const data = JSON.parse(String(e.newValue));
+        if (data.from === friend.id && data.to === currentUserId) {
+          setIsTyping(Boolean(data.typing));
+          if (clearRemoteTypingTimer.current) clearTimeout(clearRemoteTypingTimer.current);
+          if (data.typing) clearRemoteTypingTimer.current = setTimeout(() => setIsTyping(false), 3500);
+        }
+      } catch { /* ignore */ }
+    }
+
+    window.addEventListener('zmayy:typing', handleTypingEvent as EventListener);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('zmayy:typing', handleTypingEvent as EventListener);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [friend.id, currentUserId]);
 
   // ── Send ───────────────────────────────────────────────────────────────────
   async function sendMessage() {
@@ -378,7 +415,29 @@ export function ChatPanel({ friend, currentUserId, onClose }: ChatPanelProps) {
           id="chat-input"
           type="text"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+
+            // emit typing start
+            try {
+              const payload = { from: currentUserId, to: friend.id, typing: true, t: Date.now() };
+              window.dispatchEvent(new CustomEvent('zmayy:typing', { detail: payload }));
+              // set storage for inter-tab
+              localStorage.setItem('zmayy:typing', JSON.stringify(payload));
+            } catch {
+              /* ignore */
+            }
+
+            // debounce typing stop
+            if (emitTypingTimer.current) clearTimeout(emitTypingTimer.current);
+            emitTypingTimer.current = setTimeout(() => {
+              try {
+                const payload = { from: currentUserId, to: friend.id, typing: false, t: Date.now() };
+                window.dispatchEvent(new CustomEvent('zmayy:typing', { detail: payload }));
+                localStorage.setItem('zmayy:typing', JSON.stringify(payload));
+              } catch {}
+            }, 1200);
+          }}
           onKeyDown={handleKeyDown}
           placeholder="Tulis pesan…"
           className="flex-1 px-3 py-2 rounded-xl text-sm"

@@ -190,9 +190,10 @@ function MapControls({
 export interface MapViewInnerProps {
   isGhostMode: boolean;
   userId: string;
+  focusProfileId?: string | null;
 }
 
-export function MapViewInner({ isGhostMode, userId }: MapViewInnerProps) {
+export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInnerProps) {
   const supabase = createClient();
 
   const [userPos,    setUserPos]    = useState<[number, number]>(DEFAULT_CENTER);
@@ -231,7 +232,7 @@ export function MapViewInner({ isGhostMode, userId }: MapViewInnerProps) {
   const fetchProfiles = useCallback(async () => {
     const { data } = await supabase
       .from('profiles')
-      .select('id, username, display_name, avatar_initials, last_lat, last_lng')
+      .select('id, username, display_name, avatar_initials, last_lat, last_lng, updated_at')
       .not('last_lat', 'is', null)
       .neq('id', userId);   // exclude self
 
@@ -244,6 +245,15 @@ export function MapViewInner({ isGhostMode, userId }: MapViewInnerProps) {
     const interval = setInterval(fetchProfiles, 30_000);
     return () => clearInterval(interval);
   }, [fetchProfiles]);
+
+  useEffect(() => {
+    if (!focusProfileId) return;
+
+    const focused = profiles.find((profile) => profile.id === focusProfileId);
+    if (!focused || focused.last_lat === null || focused.last_lng === null) return;
+
+    setUserPos([focused.last_lat, focused.last_lng]);
+  }, [focusProfileId, profiles]);
 
   // ── Build friend icons (stable, memo-ised per id) ──────────────────────────
   profiles.forEach((p, i) => {
@@ -284,6 +294,16 @@ export function MapViewInner({ isGhostMode, userId }: MapViewInnerProps) {
           const icon = friendIconMap.current.get(p.id);
           if (!icon) return null;
           const pos: [number, number] = [p.last_lat!, p.last_lng!];
+          function popupLastSeen(updated_at?: string | null) {
+            if (!updated_at) return '—';
+            const then = new Date(updated_at).getTime();
+            const diff = Math.max(0, Math.floor((Date.now() - then) / 1000));
+            if (diff < 60) return 'Online sekarang';
+            if (diff < 3600) return `Terakhir aktif ${Math.floor(diff / 60)} menit lalu`;
+            if (diff < 86400) return `Terakhir aktif ${Math.floor(diff / 3600)} jam lalu`;
+            return `Terakhir aktif ${Math.floor(diff / 86400)} hari lalu`;
+          }
+
           return (
             <Marker key={p.id} position={pos} icon={icon}>
               <Popup>
@@ -291,7 +311,7 @@ export function MapViewInner({ isGhostMode, userId }: MapViewInnerProps) {
                   {p.display_name ?? p.username ?? 'User'}
                 </span>
                 <br />
-                <span style={{ fontSize: 11, color: '#848E9C' }}>Nearby · just now</span>
+                <span style={{ fontSize: 11, color: '#848E9C' }}>{popupLastSeen((p as any).updated_at)}</span>
               </Popup>
             </Marker>
           );

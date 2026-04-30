@@ -24,12 +24,28 @@ import { FriendsPanel } from '@/app/components/friends/FriendsPanel';
 import { ChatPanel }    from '@/app/components/chat/ChatPanel';
 import { ProfileModal } from '@/app/components/profile/ProfileModal';
 import { createClient } from '@/utils/supabase/client';
+import type { Profile } from '@/utils/supabase/types';
 
 import type { Friend }     from '@/app/components/friends/FriendsPanel';
 import type { ChatFriend } from '@/app/components/chat/ChatPanel';
 import type { User }       from '@supabase/supabase-js';
 
 type ActivePanel = 'none' | 'friends' | 'chat' | 'profile';
+
+type CommandActionDetail = {
+  action: 'chat' | 'map';
+  profile: Profile;
+};
+
+function profileToFriend(profile: Profile): Friend {
+  return {
+    id: profile.id,
+    name: profile.display_name ?? profile.username ?? 'Pengguna',
+    avatar: profile.avatar_initials ?? (profile.username?.slice(0, 2).toUpperCase() ?? '?'),
+    status: profile.last_lat !== null && profile.last_lng !== null ? 'nearby' : 'online',
+    distance: '—',
+  };
+}
 
 export default function Home() {
   const router   = useRouter();
@@ -39,6 +55,7 @@ export default function Home() {
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
   const [isGhostMode, setIsGhostMode] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [focusedProfileId, setFocusedProfileId] = useState<string | null>(null);
 
   const [activeChatFriend, setActiveChatFriend] = useState<ChatFriend>({
     id: '', name: 'Friend', avatar: '?', distance: '—',
@@ -81,7 +98,28 @@ export default function Home() {
       distance: friend.distance ?? '< 1 km',
     });
     setActivePanel('chat');
+    setFocusedProfileId(null);
   }, []);
+
+  useEffect(() => {
+    function handleCommandAction(event: Event) {
+      const detail = (event as CustomEvent<CommandActionDetail>).detail;
+      if (!detail?.profile) return;
+
+      const friend = profileToFriend(detail.profile);
+
+      if (detail.action === 'chat') {
+        openChat(friend);
+        return;
+      }
+
+      setActivePanel('none');
+      setFocusedProfileId(detail.profile.id);
+    }
+
+    window.addEventListener('zmayy:command-action', handleCommandAction as EventListener);
+    return () => window.removeEventListener('zmayy:command-action', handleCommandAction as EventListener);
+  }, [openChat]);
 
   // ── Loading state before user resolves ────────────────────────────────────
   if (!user) {
@@ -108,7 +146,7 @@ export default function Home() {
     >
       {/* Layer 0 — Full-screen Leaflet map */}
       <div className="absolute inset-0 z-0">
-        <MapView isGhostMode={isGhostMode} userId={user.id} />
+        <MapView isGhostMode={isGhostMode} userId={user.id} focusProfileId={focusedProfileId} />
       </div>
 
       {/* Layer 30 — Slide-in sidebars */}
