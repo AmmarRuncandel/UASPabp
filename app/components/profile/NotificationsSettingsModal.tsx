@@ -3,13 +3,14 @@
 /**
  * NotificationsSettingsModal — Modal untuk pengaturan notifikasi
  * ───────────────────────────────────────────────────────────────
- * • Toggle untuk berbagai tipe notifikasi
- * • Simpan preferensi ke database
+ * • Semua toggle terhubung langsung ke Supabase (instant update onChange)
+ * • Kolom: notify_global, notify_requests, notify_messages, notify_sound
+ * • Tidak ada tombol Simpan/Batal — perubahan langsung tersimpan
  */
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Loader2 } from 'lucide-react';
+import { X } from 'lucide-react';
 import { useToast } from '@/app/components/ui/Toast';
 import { createClient } from '@/utils/supabase/client';
 import type { Profile } from '@/utils/supabase/types';
@@ -18,6 +19,7 @@ interface NotificationsSettingsModalProps {
   profile: Profile | null;
   isOpen: boolean;
   onClose: () => void;
+  onUpdate?: (updated: Partial<Profile>) => void;
 }
 
 function ToggleSetting({
@@ -27,6 +29,7 @@ function ToggleSetting({
   enabled,
   onChange,
   disabled,
+  saving,
 }: {
   id: string;
   label: string;
@@ -34,9 +37,10 @@ function ToggleSetting({
   enabled: boolean;
   onChange: (enabled: boolean) => void;
   disabled?: boolean;
+  saving?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between px-3 py-3 rounded-xl hover:bg-white/5">
+    <div className={`flex items-center justify-between px-3 py-3 rounded-xl ${!disabled ? 'hover:bg-white/5' : 'opacity-50'}`}>
       <div className="flex-1">
         <p className="text-sm font-semibold" style={{ color: 'var(--color-primary)' }}>
           {label}
@@ -47,11 +51,11 @@ function ToggleSetting({
       </div>
       <button
         id={id}
-        onClick={() => onChange(!enabled)}
-        disabled={disabled}
+        onClick={() => !saving && !disabled && onChange(!enabled)}
+        disabled={disabled || saving}
         role="switch"
         aria-checked={enabled}
-        className={`toggle-track flex-shrink-0 ml-3 ${enabled ? 'active' : ''} disabled:opacity-50`}
+        className={`toggle-track flex-shrink-0 ml-3 ${enabled ? 'active' : ''} disabled:opacity-50 ${saving ? 'opacity-70' : ''}`}
       >
         <span className="toggle-thumb" />
       </button>
@@ -63,50 +67,56 @@ export function NotificationsSettingsModal({
   profile,
   isOpen,
   onClose,
+  onUpdate,
 }: NotificationsSettingsModalProps) {
   const supabase = createClient();
   const { toast } = useToast();
 
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-  const [friendRequests, setFriendRequests] = useState(true);
-  const [messages, setMessages] = useState(true);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [isLoading, setIsLoading] = useState(false);
+  const [notifyGlobal,   setNotifyGlobal]   = useState(true);
+  const [notifyRequests, setNotifyRequests] = useState(true);
+  const [notifyMessages, setNotifyMessages] = useState(true);
+  const [notifySound,    setNotifySound]    = useState(true);
 
+  // Track which toggle is currently saving to prevent double-tap
+  const [saving, setSaving] = useState<string | null>(null);
+
+  // Sync initial state from profile prop whenever modal opens
   useEffect(() => {
     if (profile) {
-      setNotificationsEnabled(profile.notifications_enabled ?? true);
+      // notify_global falls back to legacy notifications_enabled
+      setNotifyGlobal(profile.notify_global ?? profile.notifications_enabled ?? true);
+      setNotifyRequests(profile.notify_requests ?? true);
+      setNotifyMessages(profile.notify_messages ?? true);
+      setNotifySound(profile.notify_sound ?? true);
     }
   }, [profile, isOpen]);
 
-  async function handleSave() {
+  // ── Generic instant-save helper ───────────────────────────────────────────
+  async function handleToggle<K extends keyof Profile>(
+    key: K,
+    next: boolean,
+    localSetter: (v: boolean) => void,
+    savingKey: string,
+    successMsg: string,
+  ) {
     if (!profile) return;
-
-    setIsLoading(true);
+    localSetter(next);
+    setSaving(savingKey);
 
     const { error } = await supabase
       .from('profiles')
-      .update({
-        notifications_enabled: notificationsEnabled,
-      })
+      .update({ [key]: next })
       .eq('id', profile.id);
 
     if (error) {
-      toast({
-        variant: 'error',
-        title: 'Gagal menyimpan',
-        description: error.message,
-      });
+      // Revert optimistic update
+      localSetter(!next);
+      toast({ variant: 'error', title: 'Gagal menyimpan', description: error.message });
     } else {
-      toast({
-        variant: 'success',
-        title: 'Pengaturan notifikasi berhasil',
-        description: 'Preferensi Anda telah disimpan.',
-      });
-      onClose();
+      onUpdate?.({ [key]: next } as Partial<Profile>);
+      toast({ variant: 'success', title: successMsg, description: '' });
     }
-
-    setIsLoading(false);
+    setSaving(null);
   }
 
   return (
@@ -152,81 +162,105 @@ export function NotificationsSettingsModal({
 
             {/* Content */}
             <div className="p-4 space-y-1 max-h-[60vh] overflow-y-auto">
+              {/* Master toggle */}
               <ToggleSetting
                 id="notifications-main-toggle"
                 label="Aktifkan Notifikasi"
-                description="Terima semua notifikasi"
-                enabled={notificationsEnabled}
-                onChange={setNotificationsEnabled}
+                description="Aktifkan atau matikan semua notifikasi"
+                enabled={notifyGlobal}
+                saving={saving === 'notify_global'}
+                onChange={(next) =>
+                  handleToggle(
+                    'notify_global',
+                    next,
+                    setNotifyGlobal,
+                    'notify_global',
+                    next ? 'Notifikasi diaktifkan' : 'Notifikasi dimatikan',
+                  )
+                }
               />
 
-              {notificationsEnabled && (
+              {notifyGlobal && (
                 <>
                   <div className="h-px bg-white/5 my-3" />
+                  <p className="text-xs font-bold uppercase tracking-widest px-3 mb-1" style={{ color: 'var(--color-muted)' }}>
+                    Jenis Notifikasi
+                  </p>
 
                   <ToggleSetting
                     id="notifications-friend-requests"
                     label="Permintaan Teman"
                     description="Saat seseorang mengirim permintaan pertemanan"
-                    enabled={friendRequests}
-                    onChange={setFriendRequests}
-                    disabled={true}
+                    enabled={notifyRequests}
+                    saving={saving === 'notify_requests'}
+                    onChange={(next) =>
+                      handleToggle(
+                        'notify_requests',
+                        next,
+                        setNotifyRequests,
+                        'notify_requests',
+                        next ? 'Notifikasi permintaan teman aktif' : 'Notifikasi permintaan teman dimatikan',
+                      )
+                    }
                   />
 
                   <ToggleSetting
                     id="notifications-messages"
                     label="Pesan"
                     description="Pesan chat baru dari teman"
-                    enabled={messages}
-                    onChange={setMessages}
-                    disabled={true}
+                    enabled={notifyMessages}
+                    saving={saving === 'notify_messages'}
+                    onChange={(next) =>
+                      handleToggle(
+                        'notify_messages',
+                        next,
+                        setNotifyMessages,
+                        'notify_messages',
+                        next ? 'Notifikasi pesan aktif' : 'Notifikasi pesan dimatikan',
+                      )
+                    }
                   />
+
+                  <div className="h-px bg-white/5 my-3" />
+                  <p className="text-xs font-bold uppercase tracking-widest px-3 mb-1" style={{ color: 'var(--color-muted)' }}>
+                    Suara
+                  </p>
 
                   <ToggleSetting
                     id="notifications-sound"
                     label="Suara Notifikasi"
                     description="Putar suara saat ada notifikasi baru"
-                    enabled={soundEnabled}
-                    onChange={setSoundEnabled}
+                    enabled={notifySound}
+                    saving={saving === 'notify_sound'}
+                    onChange={(next) =>
+                      handleToggle(
+                        'notify_sound',
+                        next,
+                        setNotifySound,
+                        'notify_sound',
+                        next ? 'Suara notifikasi aktif' : 'Suara notifikasi dimatikan',
+                      )
+                    }
                   />
                 </>
               )}
             </div>
 
-            {/* Footer */}
+            {/* Footer — simple close */}
             <div
-              className="flex gap-2 p-4"
+              className="p-4"
               style={{ borderTop: '1px solid var(--color-border)' }}
             >
               <button
                 onClick={onClose}
-                disabled={isLoading}
-                className="flex-1 py-2.5 rounded-lg font-semibold text-sm transition-all"
+                className="w-full py-2.5 rounded-lg font-semibold text-sm transition-all"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.05)',
+                  background: 'rgba(255,255,255,0.05)',
                   border: '1px solid var(--color-border)',
                   color: 'var(--color-primary)',
                 }}
               >
-                Batal
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={isLoading}
-                className="flex-1 py-2.5 rounded-lg font-semibold text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                style={{
-                  background: 'var(--color-gold)',
-                  color: 'var(--color-base)',
-                }}
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    Menyimpan…
-                  </>
-                ) : (
-                  'Simpan'
-                )}
+                Selesai
               </button>
             </div>
           </motion.div>

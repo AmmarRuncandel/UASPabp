@@ -3,14 +3,14 @@
 /**
  * PrivacySettingsModal — Modal untuk pengaturan privasi
  * ──────────────────────────────────────────────────────
- * • Kontrol siapa yang dapat melihat profil
- * • Kontrol data lokasi
- * • Kontrol pemblokiran pengguna
+ * • Toggle is_public terhubung langsung ke Supabase (instant update onChange)
+ * • Tidak ada tombol Simpan/Batal — perubahan langsung tersimpan
+ * • Hapus Akun diganti dengan instruksi kontak support (aman di client)
  */
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Loader2, Trash2 } from 'lucide-react';
+import { X, Mail } from 'lucide-react';
 import { useToast } from '@/app/components/ui/Toast';
 import { createClient } from '@/utils/supabase/client';
 import type { Profile } from '@/utils/supabase/types';
@@ -19,6 +19,7 @@ interface PrivacySettingsModalProps {
   profile: Profile | null;
   isOpen: boolean;
   onClose: () => void;
+  onUpdate?: (updated: Partial<Profile>) => void;
 }
 
 function ToggleSetting({
@@ -28,6 +29,7 @@ function ToggleSetting({
   enabled,
   onChange,
   disabled,
+  saving,
 }: {
   id: string;
   label: string;
@@ -35,6 +37,7 @@ function ToggleSetting({
   enabled: boolean;
   onChange: (enabled: boolean) => void;
   disabled?: boolean;
+  saving?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between px-3 py-3 rounded-xl hover:bg-white/5">
@@ -48,11 +51,11 @@ function ToggleSetting({
       </div>
       <button
         id={id}
-        onClick={() => onChange(!enabled)}
-        disabled={disabled}
+        onClick={() => !saving && onChange(!enabled)}
+        disabled={disabled || saving}
         role="switch"
         aria-checked={enabled}
-        className={`toggle-track flex-shrink-0 ml-3 ${enabled ? 'active' : ''} disabled:opacity-50`}
+        className={`toggle-track flex-shrink-0 ml-3 ${enabled ? 'active' : ''} disabled:opacity-50 ${saving ? 'opacity-70' : ''}`}
       >
         <span className="toggle-thumb" />
       </button>
@@ -64,82 +67,47 @@ export function PrivacySettingsModal({
   profile,
   isOpen,
   onClose,
+  onUpdate,
 }: PrivacySettingsModalProps) {
   const supabase = createClient();
   const { toast } = useToast();
 
-  const [isPublic, setIsPublic] = useState(true);
-  const [shareLocation, setShareLocation] = useState(true);
-  const [isLoading, setIsLoading] = useState(false);
-  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [isPublic,      setIsPublic]      = useState(true);
+  const [savingPublic,  setSavingPublic]  = useState(false);
 
+  // Sync initial state from profile prop whenever modal opens
   useEffect(() => {
     if (profile) {
       setIsPublic(profile.is_public ?? true);
     }
   }, [profile, isOpen]);
 
-  async function handleSave() {
+  // ── Instant toggle handlers ────────────────────────────────────────────────
+  async function handleTogglePublic(next: boolean) {
     if (!profile) return;
-
-    setIsLoading(true);
+    setIsPublic(next);
+    setSavingPublic(true);
 
     const { error } = await supabase
       .from('profiles')
-      .update({
-        is_public: isPublic,
-      })
+      .update({ is_public: next })
       .eq('id', profile.id);
 
     if (error) {
-      toast({
-        variant: 'error',
-        title: 'Gagal menyimpan',
-        description: error.message,
-      });
+      // Revert optimistic update
+      setIsPublic(!next);
+      toast({ variant: 'error', title: 'Gagal menyimpan', description: error.message });
     } else {
+      onUpdate?.({ is_public: next });
       toast({
         variant: 'success',
-        title: 'Pengaturan privasi berhasil',
-        description: 'Preferensi Anda telah disimpan.',
+        title: next ? 'Profil sekarang publik' : 'Profil sekarang privat',
+        description: next
+          ? 'Pengguna di sekitar dalam radius 1 km dapat melihat kamu di peta.'
+          : 'Hanya teman yang dapat melihat lokasi kamu.',
       });
-      onClose();
     }
-
-    setIsLoading(false);
-  }
-
-  async function handleDeleteAccount() {
-    if (!profile) return;
-
-    const confirmed = window.confirm(
-      'Apakah Anda yakin ingin menghapus akun Anda? Tindakan ini tidak dapat dibatalkan.'
-    );
-
-    if (!confirmed) return;
-
-    setDeletingAccount(true);
-
-    // Call edge function or delete manually
-    const { error } = await supabase.auth.admin.deleteUser(profile.id);
-
-    if (error) {
-      toast({
-        variant: 'error',
-        title: 'Gagal menghapus akun',
-        description: error.message,
-      });
-    } else {
-      toast({
-        variant: 'success',
-        title: 'Akun berhasil dihapus',
-        description: 'Akun Anda telah dihapus dari sistem.',
-      });
-      // Redirect after deletion
-      window.location.href = '/login';
-    }
-
-    setDeletingAccount(false);
+    setSavingPublic(false);
   }
 
   return (
@@ -185,86 +153,67 @@ export function PrivacySettingsModal({
 
             {/* Content */}
             <div className="p-4 space-y-1 max-h-[60vh] overflow-y-auto">
+              <p className="text-xs font-bold uppercase tracking-widest px-3 mb-2" style={{ color: 'var(--color-muted)' }}>
+                Visibilitas
+              </p>
+
               <ToggleSetting
                 id="privacy-public-profile"
                 label="Profil Publik"
-                description="Izinkan teman menemukan profil Anda"
+                description="Izinkan pengguna di sekitar (±1 km) melihat kamu di peta"
                 enabled={isPublic}
-                onChange={setIsPublic}
-              />
-
-              <ToggleSetting
-                id="privacy-share-location"
-                label="Bagikan Lokasi"
-                description="Teman dapat melihat lokasi Anda di peta"
-                enabled={shareLocation}
-                onChange={setShareLocation}
-                disabled={true}
+                onChange={handleTogglePublic}
+                saving={savingPublic}
               />
 
               <div className="h-px bg-white/5 my-3" />
 
-              <p className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--color-muted)' }}>
+              <p className="text-xs font-bold uppercase tracking-widest px-3 mb-2" style={{ color: 'var(--color-muted)' }}>
                 Akun
               </p>
 
-              <button
-                onClick={handleDeleteAccount}
-                disabled={deletingAccount}
-                className="flex items-center gap-3 px-3 py-3 rounded-xl w-full text-left transition-colors hover:bg-red-500/10 disabled:opacity-50"
-              >
+              {/* Safe delete account — no client-side admin call */}
+              <div className="flex items-start gap-3 px-3 py-3 rounded-xl">
                 <div
-                  className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-                  style={{ background: 'rgba(239,68,68,0.15)' }}
+                  className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                  style={{ background: 'rgba(239,68,68,0.12)' }}
                   aria-hidden="true"
                 >
-                  <Trash2 size={18} style={{ color: '#EF4444' }} />
+                  <Mail size={16} style={{ color: '#EF4444' }} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold" style={{ color: '#EF4444' }}>
                     Hapus Akun
                   </p>
-                  <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
-                    Hapus akun dan semua data Anda secara permanen
+                  <p className="text-xs leading-relaxed mt-0.5" style={{ color: 'var(--color-muted)' }}>
+                    Untuk menghapus akun secara permanen, hubungi{' '}
+                    <a
+                      href="mailto:support@zmayy.com"
+                      className="underline"
+                      style={{ color: '#FCD535' }}
+                    >
+                      support@zmayy.com
+                    </a>
                   </p>
                 </div>
-              </button>
+              </div>
             </div>
 
-            {/* Footer */}
+            {/* Footer — simple close */}
             <div
-              className="flex gap-2 p-4"
+              className="p-4"
               style={{ borderTop: '1px solid var(--color-border)' }}
             >
               <button
                 onClick={onClose}
-                disabled={isLoading}
-                className="flex-1 py-2.5 rounded-lg font-semibold text-sm transition-all"
+                className="w-full py-2.5 rounded-lg font-semibold text-sm transition-all"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.05)',
+                  background: 'rgba(255,255,255,0.05)',
                   border: '1px solid var(--color-border)',
                   color: 'var(--color-primary)',
                 }}
               >
-                Batal
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={isLoading}
-                className="flex-1 py-2.5 rounded-lg font-semibold text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                style={{
-                  background: 'var(--color-gold)',
-                  color: 'var(--color-base)',
-                }}
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    Menyimpan…
-                  </>
-                ) : (
-                  'Simpan'
-                )}
+                Selesai
               </button>
             </div>
           </motion.div>

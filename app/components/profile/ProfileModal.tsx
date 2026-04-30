@@ -4,7 +4,10 @@
  * ProfileModal — Tampilan profil pengguna nyata dari Supabase
  * ─────────────────────────────────────────────────────────────
  * • Mengambil data pengguna dari auth.getUser() + tabel profiles
- * • QR code fungsional via api.qrserver.com
+ * • Avatar inisial dihasilkan dari kata pertama & terakhir display_name
+ * • QR code fungsional via api.qrserver.com (zmayy.com/u/:userId)
+ * • "Berbagi Lokasi" subtitle dinamis berdasarkan ghost mode & is_public
+ * • Ghost Mode activation → null-kan last_lat / last_lng di DB
  * • Tombol Keluar memanggil supabase.auth.signOut()
  * • Semua teks dalam Bahasa Indonesia
  */
@@ -37,6 +40,21 @@ interface ProfileModalProps {
   onToggleGhost: () => void;
   onClose: () => void;
   onLogout: () => void;
+}
+
+// ── Helper: derive initials from display name ──────────────────────────────────
+function deriveInitials(displayName: string | null, username: string | null): string {
+  if (displayName && displayName.trim()) {
+    const parts = displayName.trim().split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    return displayName.slice(0, 2).toUpperCase();
+  }
+  if (username && username.trim()) {
+    return username.slice(0, 2).toUpperCase();
+  }
+  return '??';
 }
 
 // ── Setting Row ───────────────────────────────────────────────────────────────
@@ -131,13 +149,22 @@ export function ProfileModal({
   // ── Derived display values ─────────────────────────────────────────────────
   const displayName = profile?.display_name ?? profile?.username ?? email?.split('@')[0] ?? 'Pengguna';
   const username    = profile?.username ?? email?.split('@')[0] ?? '—';
-  const initials    = profile?.avatar_initials
-    ?? username.slice(0, 2).toUpperCase();
 
+  // Avatar: always derive from display_name words (first + last initial), then username
+  const initials = deriveInitials(profile?.display_name ?? null, profile?.username ?? null);
+
+  // QR code pointing to real profile URL
   const qrData = userId
     ? `https://zmayy.com/u/${userId}`
     : 'https://zmayy.com';
-  const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(qrData)}&bgcolor=FFFFFF&color=0B0E11&margin=4`;
+  const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrData)}&bgcolor=FFFFFF&color=0B0E11&margin=4`;
+
+  // ── "Berbagi Lokasi" dynamic subtitle ─────────────────────────────────────
+  function getLocationSubtitle(): string {
+    if (isGhostMode) return 'Disembunyikan';
+    if (profile?.is_public) return 'Teman & Sekitar (1km)';
+    return 'Hanya Teman';
+  }
 
   useEffect(() => {
     // compute online-now based on profile.updated_at; refresh every 30s
@@ -159,10 +186,16 @@ export function ProfileModal({
     setTogglingGhost(true);
     const next = !isGhostMode;
 
-    // Update in database
+    // Build the update payload — when activating ghost, wipe coordinates
+    const updatePayload: Record<string, unknown> = { is_ghost_mode: next };
+    if (next) {
+      updatePayload.last_lat = null;
+      updatePayload.last_lng = null;
+    }
+
     const { error } = await supabase
       .from('profiles')
-      .update({ is_ghost_mode: next })
+      .update(updatePayload)
       .eq('id', userId);
 
     if (error) {
@@ -180,58 +213,58 @@ export function ProfileModal({
     play('toggle');
     toast(
       next
-        ? { variant: 'warning', title: 'Mode Hantu Aktif',    description: 'Lokasimu sekarang tersembunyi dari teman.' }
+        ? { variant: 'warning', title: 'Mode Hantu Aktif',    description: 'Lokasimu sekarang tersembunyi. Jejak koordinat telah dihapus.' }
         : { variant: 'info',    title: 'Mode Hantu Nonaktif', description: 'Lokasimu kini terlihat oleh teman.' }
     );
   }
 
-    async function handleShareViaNfc() {
-      const targetUrl = qrData;
+  async function handleShareViaNfc() {
+    const targetUrl = qrData;
 
+    try {
+      if (typeof window !== 'undefined' && 'NDEFReader' in window && (window as NFCWindow).NDEFReader) {
+        const reader = new (window as NFCWindow).NDEFReader!();
+        await reader.write(targetUrl);
+        toast({
+          variant: 'success',
+          title: 'NFC siap digunakan',
+          description: 'Tempelkan perangkat ke tag NFC untuk menulis tautan profil.',
+        });
+        return;
+      }
+
+      if (navigator.share) {
+        await navigator.share({
+          title: 'Profil Zmayy',
+          text: `Lihat profil ${displayName}`,
+          url: targetUrl,
+        });
+        return;
+      }
+
+      await navigator.clipboard.writeText(targetUrl);
+      toast({
+        variant: 'info',
+        title: 'Tautan profil disalin',
+        description: 'Perangkat ini belum mendukung NFC, jadi tautan profil disalin ke clipboard.',
+      });
+    } catch {
       try {
-        if (typeof window !== 'undefined' && 'NDEFReader' in window && (window as NFCWindow).NDEFReader) {
-          const reader = new (window as NFCWindow).NDEFReader!();
-          await reader.write(targetUrl);
-          toast({
-            variant: 'success',
-            title: 'NFC siap digunakan',
-            description: 'Tempelkan perangkat ke tag NFC untuk menulis tautan profil.',
-          });
-          return;
-        }
-
-        if (navigator.share) {
-          await navigator.share({
-            title: 'Profil Zmayy',
-            text: `Lihat profil ${displayName}`,
-            url: targetUrl,
-          });
-          return;
-        }
-
         await navigator.clipboard.writeText(targetUrl);
         toast({
-          variant: 'info',
-          title: 'Tautan profil disalin',
-          description: 'Perangkat ini belum mendukung NFC, jadi tautan profil disalin ke clipboard.',
+          variant: 'warning',
+          title: 'NFC tidak tersedia',
+          description: 'Tautan profil disalin sebagai cadangan.',
         });
       } catch {
-        try {
-          await navigator.clipboard.writeText(targetUrl);
-          toast({
-            variant: 'warning',
-            title: 'NFC tidak tersedia',
-            description: 'Tautan profil disalin sebagai cadangan.',
-          });
-        } catch {
-          toast({
-            variant: 'error',
-            title: 'Gagal membagikan profil',
-            description: 'Coba lagi di browser yang mendukung Web NFC atau gunakan QR code.',
-          });
-        }
+        toast({
+          variant: 'error',
+          title: 'Gagal membagikan profil',
+          description: 'Coba lagi di browser yang mendukung Web NFC atau gunakan QR code.',
+        });
       }
     }
+  }
 
   // ── Logout ─────────────────────────────────────────────────────────────────
   async function handleLogout() {
@@ -291,7 +324,7 @@ export function ProfileModal({
             />
           </motion.div>
 
-          {/* Avatar */}
+          {/* Avatar — derived initials */}
           <AnimatePresence mode="wait">
             {loadingUser ? (
               <motion.div
@@ -383,25 +416,29 @@ export function ProfileModal({
             </button>
           </div>
 
+          {/* Berbagi Lokasi — visual indicator, no click action */}
           <SettingRow
             id="profile-location-btn"
             Icon={MapPin}
             title="Berbagi Lokasi"
-            subtitle="Hanya teman"
-            onClick={() => toast({ variant: 'info', title: 'Berbagi lokasi', description: 'Lokasi Anda dibagikan ke teman yang sudah ditambahkan.' })}
+            subtitle={getLocationSubtitle()}
           />
           <SettingRow
             id="profile-notifications-btn"
             Icon={Bell}
             title="Notifikasi"
-            subtitle={profile?.notifications_enabled ?? true ? 'Semua aktif' : 'Dimatikan'}
+            subtitle={
+              (profile?.notify_global ?? profile?.notifications_enabled ?? true)
+                ? 'Semua aktif'
+                : 'Dimatikan'
+            }
             onClick={() => setIsNotificationsOpen(true)}
           />
           <SettingRow
             id="profile-privacy-btn"
             Icon={ShieldCheck}
-            title="Privasi &amp; Keamanan"
-            subtitle="Kelola data &amp; pemblokiran"
+            title="Privasi & Keamanan"
+            subtitle="Kelola data & pemblokiran"
             onClick={() => setIsPrivacyOpen(true)}
           />
           <SettingRow
@@ -423,7 +460,7 @@ export function ProfileModal({
           </p>
 
           <div className="flex items-center gap-4">
-            {/* Real QR via free API */}
+            {/* Real QR via free API — size=150x150 */}
             <div
               aria-label="Kode QR Zmayy"
               style={{
@@ -504,7 +541,7 @@ export function ProfileModal({
         isOpen={isEditOpen}
         onClose={() => setIsEditOpen(false)}
         onSave={() => {
-          // Refresh profile data
+          // Refresh profile data after save
           async function refresh() {
             const { data } = await supabase
               .from('profiles')
@@ -522,6 +559,7 @@ export function ProfileModal({
         profile={profile}
         isOpen={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
+        onUpdate={(updated) => setProfile((p) => p ? { ...p, ...updated } : p)}
       />
 
       {/* Privacy Settings Modal */}
@@ -529,6 +567,7 @@ export function ProfileModal({
         profile={profile}
         isOpen={isPrivacyOpen}
         onClose={() => setIsPrivacyOpen(false)}
+        onUpdate={(updated) => setProfile((p) => p ? { ...p, ...updated } : p)}
       />
     </motion.div>
   );

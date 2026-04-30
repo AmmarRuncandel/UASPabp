@@ -3,9 +3,11 @@
 /**
  * EditProfileModal — Modal untuk edit profil pengguna
  * ──────────────────────────────────────────────────
- * • Edit display_name & avatar_initials
- * • Simpan perubahan ke Supabase
- * • Validasi input
+ * • Edit display_name — avatar_initials diturunkan otomatis dari nama
+ * • Inisial = huruf pertama kata pertama + huruf pertama kata terakhir
+ *   Contoh: "Luthfi Azzufar" → "LA"
+ * • Simpan perubahan ke Supabase (display_name + avatar_initials)
+ * • Input avatar_initials read-only — hanya auto-generate dari display_name
  */
 
 import { useState, useEffect } from 'react';
@@ -22,6 +24,14 @@ interface EditProfileModalProps {
   onSave: () => void;
 }
 
+/** Derive avatar initials strictly from display_name words */
+function computeInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 export function EditProfileModal({
   profile,
   isOpen,
@@ -31,38 +41,35 @@ export function EditProfileModal({
   const supabase = createClient();
   const { toast } = useToast();
 
-  const [displayName, setDisplayName] = useState('');
+  const [displayName,    setDisplayName]    = useState('');
   const [avatarInitials, setAvatarInitials] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [hasChanges, setHasChanges] = useState(false);
+  const [isLoading,      setIsLoading]      = useState(false);
+  const [hasChanges,     setHasChanges]     = useState(false);
 
   useEffect(() => {
     if (profile) {
-      setDisplayName(profile.display_name || '');
-      setAvatarInitials(profile.avatar_initials || '');
+      const name = profile.display_name || '';
+      setDisplayName(name);
+      // Always recompute initials from display_name on open
+      setAvatarInitials(name ? computeInitials(name) : (profile.avatar_initials || ''));
     }
   }, [profile, isOpen]);
 
   // Detect changes
   useEffect(() => {
     if (profile) {
-      const changed =
-        displayName !== (profile.display_name || '') ||
-        avatarInitials !== (profile.avatar_initials || '');
+      const changed = displayName !== (profile.display_name || '');
       setHasChanges(changed);
     }
-  }, [displayName, avatarInitials, profile]);
+  }, [displayName, profile]);
 
   // Auto-generate avatar initials from display name
   const handleDisplayNameChange = (value: string) => {
     setDisplayName(value);
     if (value.trim()) {
-      const parts = value.trim().split(/\s+/);
-      if (parts.length >= 2) {
-        setAvatarInitials((parts[0][0] + parts[parts.length - 1][0]).toUpperCase());
-      } else {
-        setAvatarInitials(value.slice(0, 2).toUpperCase());
-      }
+      setAvatarInitials(computeInitials(value));
+    } else {
+      setAvatarInitials('');
     }
   };
 
@@ -78,24 +85,17 @@ export function EditProfileModal({
       return;
     }
 
-    if (!avatarInitials.trim() || avatarInitials.length > 3) {
-      toast({
-        variant: 'error',
-        title: 'Avatar inisial tidak valid',
-        description: 'Gunakan 2-3 karakter.',
-      });
-      return;
-    }
-
     if (!profile) return;
 
     setIsLoading(true);
 
+    const initials = computeInitials(displayName.trim());
+
     const { error } = await supabase
       .from('profiles')
       .update({
-        display_name: displayName.trim(),
-        avatar_initials: avatarInitials.toUpperCase(),
+        display_name:    displayName.trim(),
+        avatar_initials: initials,
       })
       .eq('id', profile.id);
 
@@ -112,7 +112,7 @@ export function EditProfileModal({
     toast({
       variant: 'success',
       title: 'Profil berhasil diperbarui',
-      description: 'Perubahan Anda telah disimpan.',
+      description: `Nama tampilan diubah menjadi "${displayName.trim()}".`,
     });
 
     setIsLoading(false);
@@ -176,7 +176,7 @@ export function EditProfileModal({
                 <input
                   id="edit-display-name"
                   type="text"
-                  placeholder="Contoh: Halo Duniya"
+                  placeholder="Contoh: Luthfi Azzufar"
                   value={displayName}
                   onChange={(e) => handleDisplayNameChange(e.target.value)}
                   disabled={isLoading}
@@ -189,41 +189,15 @@ export function EditProfileModal({
                 />
               </div>
 
-              {/* Avatar Initials */}
-              <div>
-                <label
-                  htmlFor="edit-avatar-initials"
-                  className="block text-xs font-semibold uppercase tracking-widest mb-2"
-                  style={{ color: 'var(--color-muted)' }}
-                >
-                  Inisial Avatar
-                </label>
-                <input
-                  id="edit-avatar-initials"
-                  type="text"
-                  placeholder="HD"
-                  value={avatarInitials}
-                  onChange={(e) => setAvatarInitials(e.target.value.slice(0, 3))}
-                  disabled={isLoading}
-                  maxLength={3}
-                  className="w-full px-3 py-2.5 rounded-lg text-sm focus:outline-none transition-all text-center font-bold text-lg"
-                  style={{
-                    background: 'rgba(252, 213, 53, 0.1)',
-                    border: '1px solid rgba(252, 213, 53, 0.3)',
-                    color: 'var(--color-gold)',
-                  }}
-                />
-              </div>
-
-              {/* Preview Avatar */}
+              {/* Avatar Preview — auto-generated, read-only */}
               {avatarInitials && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="flex justify-center mt-4"
+                  className="flex flex-col items-center gap-2 mt-2"
                 >
                   <div
-                    className="w-16 h-16 rounded-full flex items-center justify-center font-bold text-lg"
+                    className="w-16 h-16 rounded-full flex items-center justify-center font-bold text-xl"
                     style={{
                       background: 'var(--color-gold)',
                       color: 'var(--color-base)',
@@ -231,6 +205,12 @@ export function EditProfileModal({
                   >
                     {avatarInitials}
                   </div>
+                  <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+                    Inisial avatar akan menjadi{' '}
+                    <span style={{ color: 'var(--color-gold)', fontWeight: 700 }}>
+                      {avatarInitials}
+                    </span>
+                  </p>
                 </motion.div>
               )}
 

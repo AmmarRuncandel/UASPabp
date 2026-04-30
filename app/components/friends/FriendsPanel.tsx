@@ -5,9 +5,9 @@
  * ────────────────────────────────────────────────────────
  * • Fetches confirmed friends (friendships.status = 'accepted')
  * • Fetches incoming pending requests
- * • Search against profiles by username/display_name
- * • Send a friend request (insert into friendships)
- * • Accept a request (update status to 'accepted')
+ * • Search against profiles by username using .ilike('username', '%query%')
+ * • Send a friend request (insert into friendships) — .select() surfaces RLS errors
+ * • Accept a request (update status to 'accepted') — .select() surfaces RLS errors
  * • Passes pendingCount up to parent for NavBar badge
  */
 
@@ -166,15 +166,25 @@ function SearchResultCard({
 
   async function sendRequest() {
     setSending(true);
+
     const { error } = await supabase
       .from('friendships')
-      .insert({ requester_id: currentUserId, addressee_id: profile.id, status: 'pending' });
+      .insert({ requester_id: currentUserId, addressee_id: profile.id, status: 'pending' })
+      .select(); // .select() surfaces RLS errors immediately
 
     if (error) {
-      toast({ variant: 'error', title: 'Could not send request', description: error.message });
+      // Provide a clearer message for the common "already exists" RLS / unique constraint case
+      const msg = error.code === '23505'
+        ? 'Permintaan pertemanan sudah terkirim sebelumnya.'
+        : error.message;
+      toast({ variant: 'error', title: 'Gagal mengirim permintaan', description: msg });
     } else {
       setSent(true);
-      toast({ variant: 'success', title: 'Request sent', description: `Friend request sent to ${profile.display_name ?? profile.username}.` });
+      toast({
+        variant: 'success',
+        title: 'Permintaan terkirim!',
+        description: `Permintaan pertemanan dikirim ke ${profile.display_name ?? profile.username}.`,
+      });
       onRequestSent();
     }
     setSending(false);
@@ -205,6 +215,7 @@ function SearchResultCard({
         </p>
       </div>
       <button
+        id={`add-friend-${profile.id}`}
         onClick={sendRequest}
         disabled={sending || sent}
         className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50"
@@ -213,6 +224,7 @@ function SearchResultCard({
             ? { background: 'rgba(46,204,113,0.15)', color: '#2ECC71' }
             : { background: 'var(--color-gold)', color: 'var(--color-base)' }
         }
+        aria-label={sent ? 'Permintaan terkirim' : `Tambah teman ${profile.username}`}
       >
         {sent ? <UserCheck size={13} /> : <UserPlus size={13} />}
         {sent ? 'Terkirim' : 'Tambah'}
@@ -274,7 +286,7 @@ export function FriendsPanel({
 
     const toFriend = (row: Record<string, unknown>, profile: Profile, isPending = false): Friend => ({
       id:           profile.id,
-      name:         profile.display_name ?? profile.username ?? 'User',
+      name:         profile.display_name ?? profile.username ?? 'Pengguna',
       avatar:       profile.avatar_initials ?? profile.username?.slice(0, 2).toUpperCase() ?? '??',
       status:       (profile.last_lat !== null ? 'nearby' : 'online') as Friend['status'],
       isPending,
@@ -302,7 +314,7 @@ export function FriendsPanel({
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // ── Search profiles (debounced) ────────────────────────────────────────────
+  // ── Search profiles (debounced) — uses ilike on username only ─────────────
   useEffect(() => {
     if (!search.trim()) { setSearchResults([]); return; }
 
@@ -311,7 +323,7 @@ export function FriendsPanel({
       const { data } = await supabase
         .from('profiles')
         .select('id, username, display_name, avatar_initials, last_lat, last_lng')
-        .or(`username.ilike.%${search}%,display_name.ilike.%${search}%`)
+        .ilike('username', `%${search.trim()}%`)  // single-column ilike per mandate
         .neq('id', currentUserId)
         .limit(8);
 
@@ -327,15 +339,16 @@ export function FriendsPanel({
     const { error } = await supabase
       .from('friendships')
       .update({ status: 'accepted' })
-      .eq('id', friendshipId);
+      .eq('id', friendshipId)
+      .select(); // surfaces RLS errors
 
     if (error) {
-      toast({ variant: 'error', title: 'Error', description: error.message });
+      toast({ variant: 'error', title: 'Gagal menerima permintaan', description: error.message });
     } else {
       toast({
         variant: 'success',
-        title: `${friendName} added`,
-        description: 'You can now see each other on the map.',
+        title: `${friendName} ditambahkan!`,
+        description: 'Sekarang kalian bisa saling melihat di peta.',
       });
       loadData();
     }
@@ -379,12 +392,12 @@ export function FriendsPanel({
           <input
             id="friends-search"
             type="text"
-            placeholder="Cari pengguna…"
+            placeholder="Cari username…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="flex-1 text-sm bg-transparent"
             style={{ color: 'var(--color-primary)' }}
-            aria-label="Cari pengguna"
+            aria-label="Cari pengguna berdasarkan username"
           />
         </div>
       </div>

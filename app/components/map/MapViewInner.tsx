@@ -5,7 +5,8 @@
  * ─────────────────────────────────────────────────────────
  * • CartoDB Dark Matter tiles (no API key)
  * • navigator.geolocation.watchPosition → upserts profiles.last_lat/lng
- * • Fetches all profiles and renders friend markers with PingRipple
+ * • Fetches visible users via get_visible_users() RPC (friends + strangers ≤1 km)
+ * • Ghost Mode activation explicitly nulls last_lat/last_lng in the DB
  * • Custom gold SVG teardrop for current user
  * • Zoom / recenter controls via useMap()
  */
@@ -17,7 +18,7 @@ import 'leaflet/dist/leaflet.css';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MapPin, Navigation, ZoomIn, ZoomOut } from 'lucide-react';
 import { createClient } from '@/utils/supabase/client';
-import type { Profile } from '@/utils/supabase/types';
+import type { VisibleUser } from '@/utils/supabase/types';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const DEFAULT_CENTER: [number, number] = [-7.3274, 108.2142]; // Tasikmalaya
@@ -81,12 +82,14 @@ function makeUserIcon(): L.DivIcon {
   });
 }
 
-function makeFriendIcon(initials: string, delay: number): L.DivIcon {
+function makeFriendIcon(initials: string, delay: number, isFriend: boolean): L.DivIcon {
+  const borderColor = isFriend ? '#FCD535' : '#848E9C';
+  const shadowColor = isFriend ? 'rgba(252,213,53,0.45)' : 'rgba(132,142,156,0.35)';
   return L.divIcon({
     html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;">
-             <span class="leaflet-ping-ring" style="animation-delay:${delay}s"></span>
-             <span class="leaflet-ping-ring" style="animation-delay:${delay + 1.1}s"></span>
-             <div style="width:36px;height:36px;border-radius:50%;background:#181A20;border:2px solid #FCD535;color:#FCD535;font-size:11px;font-weight:700;font-family:Inter,sans-serif;display:flex;align-items:center;justify-content:center;box-shadow:0 0 12px rgba(252,213,53,0.45);cursor:pointer;">${initials}</div>
+             <span class="leaflet-ping-ring" style="animation-delay:${delay}s;border-color:${borderColor}66"></span>
+             <span class="leaflet-ping-ring" style="animation-delay:${delay + 1.1}s;border-color:${borderColor}66"></span>
+             <div style="width:36px;height:36px;border-radius:50%;background:#181A20;border:2px solid ${borderColor};color:${borderColor};font-size:11px;font-weight:700;font-family:Inter,sans-serif;display:flex;align-items:center;justify-content:center;box-shadow:0 0 12px ${shadowColor};cursor:pointer;">${initials}</div>
            </div>`,
     className: '',
     iconSize: [40, 40],
@@ -179,7 +182,7 @@ function MapControls({
       >
         <MapPin size={14} style={{ color: 'var(--color-gold)' }} />
         <span className="text-xs font-semibold" style={{ color: 'var(--color-primary)' }}>
-          {isGhostMode ? '—' : nearbyCount} {nearbyCount === 1 ? 'teman' : 'teman'} di sekitar
+          {isGhostMode ? '—' : nearbyCount} {nearbyCount === 1 ? 'pengguna' : 'pengguna'} di sekitar
         </span>
       </motion.div>
     </>
@@ -196,14 +199,37 @@ export interface MapViewInnerProps {
 export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInnerProps) {
   const supabase = createClient();
 
-  const [userPos,    setUserPos]    = useState<[number, number]>(DEFAULT_CENTER);
-  const [profiles,   setProfiles]   = useState<Profile[]>([]);
+  const [userPos,       setUserPos]       = useState<[number, number]>(DEFAULT_CENTER);
+  const [visibleUsers,  setVisibleUsers]  = useState<VisibleUser[]>([]);
+  const [currentLat,    setCurrentLat]    = useState<number | null>(null);
+  const [currentLng,    setCurrentLng]    = useState<number | null>(null);
+
+  // Track previous ghost mode to detect the transition OFF → ON
+  const prevGhostRef = useRef(isGhostMode);
 
   // Stable icon map — keyed by profile id
   const userIconRef   = useRef<L.DivIcon | null>(null);
   const friendIconMap = useRef<Map<string, L.DivIcon>>(new Map());
 
   if (!userIconRef.current) userIconRef.current = makeUserIcon();
+
+  // ── Ghost Mode: wipe coordinates from DB when activated ───────────────────
+  useEffect(() => {
+    const wasGhost = prevGhostRef.current;
+    prevGhostRef.current = isGhostMode;
+
+    // Transition: non-ghost → ghost → erase footprint
+    if (!wasGhost && isGhostMode) {
+      supabase
+        .from('profiles')
+        .update({ last_lat: null, last_lng: null })
+        .eq('id', userId)
+        .then(({ error }) => {
+          if (error) console.warn('[Map] Failed to wipe ghost coordinates:', error.message);
+          else console.log('[Map] Ghost Mode: coordinates wiped from DB');
+        });
+    }
+  }, [isGhostMode, userId, supabase]);
 
   // ── Geolocation watchPosition ──────────────────────────────────────────────
   useEffect(() => {
@@ -215,6 +241,8 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
         setUserPos([lat, lng]);
+        setCurrentLat(lat);
+        setCurrentLng(lng);
 
         // Upsert into profiles — non-blocking, best-effort
         await supabase
@@ -229,44 +257,57 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
     return () => navigator.geolocation.clearWatch(watchId);
   }, [userId, supabase, isGhostMode]);
 
-  // ── Fetch other users' profiles ────────────────────────────────────────────
-  const fetchProfiles = useCallback(async () => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('id, username, display_name, avatar_initials, last_lat, last_lng, updated_at')
-      .not('last_lat', 'is', null)
-      .neq('id', userId);   // exclude self
+  // ── Fetch visible users via spatial RPC ────────────────────────────────────
+  const fetchVisibleUsers = useCallback(async () => {
+    // Need at least a rough location to call the RPC
+    const lat = currentLat ?? DEFAULT_CENTER[0];
+    const lng = currentLng ?? DEFAULT_CENTER[1];
 
-    if (data) setProfiles(data as Profile[]);
-  }, [supabase, userId]);
+    const { data, error } = await supabase.rpc('get_visible_users', {
+      caller_id: userId,
+      user_lat:  lat,
+      user_lng:  lng,
+    });
+
+    if (error) {
+      console.warn('[Map] RPC get_visible_users error:', error.message);
+      return;
+    }
+
+    if (data) {
+      // Filter out entries without valid coordinates (safety guard)
+      const users = (data as VisibleUser[]).filter(
+        (u) => u.last_lat !== null && u.last_lng !== null
+      );
+      setVisibleUsers(users);
+    }
+  }, [supabase, userId, currentLat, currentLng]);
 
   useEffect(() => {
-    fetchProfiles();
-    // Refresh every 30 s to pick up location updates from friends
-    const interval = setInterval(fetchProfiles, 30_000);
+    fetchVisibleUsers();
+    // Refresh every 30 s to pick up location updates
+    const interval = setInterval(fetchVisibleUsers, 30_000);
     return () => clearInterval(interval);
-  }, [fetchProfiles]);
+  }, [fetchVisibleUsers]);
 
+  // ── Focus on a specific profile (from FriendsPanel / CommandMenu) ──────────
   useEffect(() => {
     if (!focusProfileId) return;
 
-    const focused = profiles.find((profile) => profile.id === focusProfileId);
-    if (!focused || focused.last_lat === null || focused.last_lng === null) return;
+    const focused = visibleUsers.find((u) => u.id === focusProfileId);
+    if (!focused) return;
 
     setUserPos([focused.last_lat, focused.last_lng]);
-  }, [focusProfileId, profiles]);
+  }, [focusProfileId, visibleUsers]);
 
   // ── Build friend icons (stable, memo-ised per id) ──────────────────────────
-  profiles.forEach((p, i) => {
-    if (!friendIconMap.current.has(p.id)) {
-      const initials = p.avatar_initials ?? (p.username?.slice(0, 2).toUpperCase() ?? '??');
-      friendIconMap.current.set(p.id, makeFriendIcon(initials, (i % 4) * 0.55));
+  visibleUsers.forEach((u, i) => {
+    if (!friendIconMap.current.has(u.id)) {
+      const initials = u.avatar_initials ?? (u.username?.slice(0, 2).toUpperCase() ?? '??');
+      const isFriend = u.relation_type === 'friend';
+      friendIconMap.current.set(u.id, makeFriendIcon(initials, (i % 4) * 0.55, isFriend));
     }
   });
-
-  const visibleProfiles = profiles.filter(
-    (p) => p.last_lat !== null && p.last_lng !== null
-  );
 
   return (
     <div className="relative w-full h-full overflow-hidden" aria-label="Map view">
@@ -283,18 +324,19 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
         {!isGhostMode && (
           <Marker position={userPos} icon={userIconRef.current!}>
             <Popup>
-              <span style={{ color: '#FCD535', fontWeight: 700 }}>You</span>
+              <span style={{ color: '#FCD535', fontWeight: 700 }}>Kamu</span>
               <br />
-              <span style={{ fontSize: 11, color: '#848E9C' }}>Your current location</span>
+              <span style={{ fontSize: 11, color: '#848E9C' }}>Lokasi kamu saat ini</span>
             </Popup>
           </Marker>
         )}
 
-        {/* Friend markers from DB */}
-        {visibleProfiles.map((p) => {
-          const icon = friendIconMap.current.get(p.id);
+        {/* Visible user markers from RPC */}
+        {visibleUsers.map((u) => {
+          const icon = friendIconMap.current.get(u.id);
           if (!icon) return null;
-          const pos: [number, number] = [p.last_lat!, p.last_lng!];
+          const pos: [number, number] = [u.last_lat, u.last_lng];
+
           function popupLastSeen(updated_at?: string | null) {
             if (!updated_at) return '—';
             const then = new Date(updated_at).getTime();
@@ -305,14 +347,18 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
             return `Terakhir aktif ${Math.floor(diff / 86400)} hari lalu`;
           }
 
+          const relationLabel = u.relation_type === 'friend' ? 'Teman' : 'Pengguna di sekitar';
+
           return (
-            <Marker key={p.id} position={pos} icon={icon}>
+            <Marker key={u.id} position={pos} icon={icon}>
               <Popup>
                 <span style={{ color: '#FCD535', fontWeight: 700 }}>
-                  {p.display_name ?? p.username ?? 'User'}
+                  {u.display_name ?? u.username ?? 'Pengguna'}
                 </span>
                 <br />
-                <span style={{ fontSize: 11, color: '#848E9C' }}>{popupLastSeen((p as any).updated_at)}</span>
+                <span style={{ fontSize: 10, color: '#FCD535', opacity: 0.7 }}>{relationLabel}</span>
+                <br />
+                <span style={{ fontSize: 11, color: '#848E9C' }}>{popupLastSeen(u.updated_at)}</span>
               </Popup>
             </Marker>
           );
@@ -321,7 +367,7 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
         {/* Map controls inside context */}
         <MapControls
           isGhostMode={isGhostMode}
-          nearbyCount={visibleProfiles.length}
+          nearbyCount={visibleUsers.length}
           userCenter={userPos}
         />
       </MapContainer>

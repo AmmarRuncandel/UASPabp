@@ -1,13 +1,17 @@
 {
+  "id": "/",
   "name": "Zmayy — Social Mapping & Real-Time Chat",
   "short_name": "Zmayy",
-  "description": "Discover friends near you, share your location, and chat in real time with Zmayy social mapping application.",
+  "description": "Temukan teman di sekitarmu, bagikan lokasi, dan chat secara real-time dengan Zmayy social mapping.",
+  "lang": "id",
+  "dir": "ltr",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
   "theme_color": "#0B0E11",
   "background_color": "#0B0E11",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/images/zmay_logo.png",
@@ -22,16 +26,24 @@
       "purpose": "any"
     },
     {
-      "src": "/favicon.ico",
-      "sizes": "64x64",
-      "type": "image/x-icon"
+      "src": "/images/zmay_logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
     }
   ],
   "screenshots": [
     {
       "src": "/images/zmay_logo.png",
       "sizes": "540x720",
-      "type": "image/png"
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Peta sosial Zmayy"
     }
   ],
   "categories": ["social", "productivity"],
@@ -39,7 +51,7 @@
     {
       "name": "Buka Peta",
       "short_name": "Peta",
-      "description": "Lihat teman di peta",
+      "description": "Lihat teman di peta secara real-time",
       "url": "/",
       "icons": [
         {
