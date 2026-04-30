@@ -1,76 +1,105 @@
 =======================================================================
 DOKUMEN HANDOFF PROYEK ZMAYY (SOCIAL MAPPING & REAL-TIME CHAT)
 =======================================================================
-Status Proyek: MVP (Minimum Viable Product) V1.0 Core Engine Ready
+Status Proyek: MVP V1.1 (Core Engine Stabilized + Build Clean)
 Konteks: Proyek Kolaborasi Tim 212
 Target Wilayah: Tasikmalaya, Jawa Barat
+Tanggal Pembaruan: 30 April 2026
 
 -----------------------------------------------------------------------
 [1] STACK TEKNOLOGI YANG DIGUNAKAN
 -----------------------------------------------------------------------
-- Frontend: Next.js 14+ (App Router), React, Tailwind CSS.
+- Frontend: Next.js 16.2.4 (App Router), React 19.2.4, Tailwind CSS v4.
 - Map Engine: React-Leaflet dengan CartoDB Dark Matter tiles (Tanpa API Key).
 - Backend & Database: Supabase (PostgreSQL, GoTrue Auth, Realtime).
-- UI/UX & Animasi: Framer Motion, Radix UI (atau komponen kustom sejenis), SVG Custom Filters.
-- Bahasa UI: 100% Bahasa Indonesia (Lokalisasi selesai).
+- UI/UX & Animasi: Framer Motion, Lucide React, komponen UI kustom, SVG + CSS animation.
+- PWA Layer: Manifest, Service Worker custom, offline fallback page, install prompt.
+- Bahasa UI: Dominan Bahasa Indonesia (masih ada sebagian string English di beberapa komponen).
 
 -----------------------------------------------------------------------
-[2] PROGRES SAAT INI (SELESAI DIBANGUN)
+[2] PROGRES SAAT INI (KONDISI KODE TERBARU)
 -----------------------------------------------------------------------
 A. AUTENTIKASI & DATABASE (SUPABASE)
-   - Setup Supabase SSR (Server-Side Rendering) menggunakan `proxy.ts` (pengganti middleware di Next.js 16).
+   - Setup Supabase SSR menggunakan proxy.ts (pengganti middleware pada Next.js 16).
    - Terdapat SQL Trigger kustom di Supabase: Otomatis mem-bypass verifikasi email (auto-verify) dan otomatis membuat data di tabel `public.profiles` saat ada pendaftaran baru.
    - UI Login/Register memiliki animasi slider horizontal mulus (Framer Motion). Saat register berhasil, email/password otomatis terisi di form login.
    - Placeholder dan Error Handling auth sudah responsif (tampil warna merah/amber jika kredensial salah).
+   - Route guard aktif: user non-login diarahkan ke /login, user login diarahkan kembali ke / jika membuka /login.
 
 B. MAP & GEOLOCATION
    - Peta dirender menggunakan komponen wrapper `next/dynamic` (`ssr: false`) untuk menghindari error "Window is not defined".
    - Menggunakan API Geolocation browser (`navigator.geolocation.watchPosition`) secara real-time.
    - Posisi user otomatis di-upsert ke Supabase (kolom `last_lat`, `last_lng` di tabel `profiles`).
    - Marker user dan teman menggunakan desain Custom Gold SVG dengan animasi "PingRipple" berbasis CSS keyframes.
+   - Map controls (zoom, recenter FAB, nearby badge) sudah aktif.
+   - Ghost mode sudah terhubung: saat aktif, geolocation watch dihentikan dan marker user disembunyikan.
 
 C. SISTEM PERTEMANAN (FRIENDSHIPS)
    - Pencarian akun berfungsi secara real-time (debounced search ke tabel `profiles`).
    - Logika penambahan teman (Add Friend, Pending, Accept) terikat langsung ke tabel `friendships`.
    - UI Panel Teman memiliki empty states yang rapi.
+   - Pending request counter sudah dikirim ke NavBar sebagai badge.
 
 D. EPHEMERAL CHAT (PESAN SEMENTARA)
    - Chat terhubung ke tabel `messages` dengan fitur Supabase Realtime (pesan langsung masuk tanpa refresh).
    - Logika Ephemeral: Database diatur untuk otomatis menghapus pesan setelah 10 percakapan atau lewat dari 3 jam (menggunakan SQL trigger di backend).
    - UI Chat merender optimistik, memiliki loading/empty state yang rapi (tidak lagi stuck di skeleton loader), dan membunyikan micro-acoustic (HTML5 Audio) saat mengirim pesan.
+   - Typing indicator lokal/inter-tab sudah ada (event + localStorage).
 
 E. PROFIL & UI LAINNYA
    - Profile Modal menampilkan data nyata (Avatar inisial, username, nama) dari database.
    - Terdapat fungsionalitas QR Code dinamis berbasis API untuk membagikan profil.
    - Tombol PWA "Pasang Aplikasi" diposisikan di kiri bawah (aman dari tombol zoom peta).
+   - Toggle "Mode Hantu" SUDAH terhubung ke kolom `profiles.is_ghost_mode`.
+   - NFC sharing SUDAH diimplementasikan via Web NFC (`NDEFReader`) dengan fallback ke Web Share / clipboard.
+   - Modal pengaturan Notifikasi dan Privasi sudah tersedia; sebagian opsi masih placeholder/disabled.
+
+F. PWA & OFFLINE
+   - `public/manifest.json` sudah terpasang di layout.
+   - Service Worker `public/sw.js` sudah register otomatis dari client component.
+   - Strategi cache dasar sudah ada (cache-first assets, network-first API, offline fallback).
+   - Halaman offline tersedia di `public/offline.html` dan `app/offline.tsx`.
+   - Error strict TypeScript pada `ServiceWorkerRegister.tsx` sudah diperbaiki (safe timer clear).
+
+G. STATUS BUILD TERBARU
+   - `npm run build` berhasil (Next.js production build clean).
+   - TypeScript check lulus.
+   - Route statis yang ter-generate: `/`, `/_not-found`, `/login`.
 
 -----------------------------------------------------------------------
 [3] SKEMA DATABASE UTAMA (SUPABASE)
 -----------------------------------------------------------------------
 Pastikan agen AI mengetahui struktur ini saat mengembangkan fitur baru:
 1. `auth.users` (Bawaan Supabase)
-2. `profiles` (id [FK ke auth.users], username, display_name, avatar_initials, last_lat, last_lng, updated_at)
+2. `profiles` (id [FK ke auth.users], username, display_name, avatar_initials, last_lat, last_lng, updated_at, is_ghost_mode, notifications_enabled, is_public)
 3. `friendships` (id, requester_id, addressee_id, status, created_at)
 4. `messages` (id, sender_id, receiver_id, content, created_at)
 
 -----------------------------------------------------------------------
 [4] PENGEMBANGAN KEDEPAN (TODO LIST UNTUK TIM & AI)
 -----------------------------------------------------------------------
-Tugas berikutnya untuk menyempurnakan aplikasi menjadi Production-Ready:
+Tugas berikutnya untuk menyempurnakan aplikasi menjadi Production-Ready (update terbaru):
 
-1. GHOST MODE LOGIC (Prioritas Tinggi):
-   - Toggle "Mode Hantu" di ProfileModal saat ini masih statis.
-   - Tugas: Sambungkan toggle ini ke kolom baru (misal: `is_ghost_mode` boolean) di tabel `profiles`. Jika `true`, hentikan pengiriman koordinat ke database, atau cegah user lain menarik data lokasi user tersebut.
+1. HARDEN GHOST MODE (Prioritas Tinggi):
+   - Saat ghost mode aktif, tracking user sendiri sudah berhenti. Namun koordinat terakhir user masih mungkin tersisa di database.
+   - Tugas: saat mengaktifkan ghost mode, null-kan `last_lat/last_lng` untuk user tersebut.
+   - Tugas: filter query marker agar profil dengan `is_ghost_mode = true` tidak ditampilkan oleh user lain.
 
-2. PROGRESSIVE WEB APP (PWA) SETUP:
-   - Buat `manifest.json` dan daftarkan Service Worker.
-   - Pastikan aplikasi bisa di-install ke Home Screen HP (seperti Android/iOS app) dan menyembunyikan address bar browser saat dibuka via ikon.
+2. PWA HARDENING:
+   - Setup dasar PWA sudah selesai.
+   - Tugas lanjutan: versi cache yang lebih disiplin (cache busting), audit asset yang perlu precache, dan pengujian installability Android/iOS di perangkat nyata.
+   - Tugas lanjutan: pertimbangkan fallback untuk rute dinamis tambahan selain root.
 
-3. NFC INTEGRATION (Eksperimental):
-   - Di UI ProfileModal terdapat tombol "Tap to Share via NFC".
-   - Tugas: Gunakan Web NFC API (`NDEFReader`) agar user bisa membagikan link profil mereka hanya dengan mendekatkan smartphone.
+3. NFC INTEGRATION (Eksperimental - Sudah Ada, Perlu QA):
+   - Implementasi Web NFC sudah ada dengan fallback share/clipboard.
+   - Tugas: validasi kompatibilitas browser Android (Chrome) dan UX error states di device non-NFC.
 
-4. DEPLOYMENT (Vercel):
+4. PRIVASI/AKUN & KEAMANAN:
+   - Review ulang alur hapus akun pada client side (`supabase.auth.admin.deleteUser`) karena berpotensi tidak punya izin di environment publik.
+   - Tugas: pindahkan aksi sensitif ke server-side (Edge Function / Route Handler aman) agar tidak mengekspos operasi admin di client.
+
+5. DEPLOYMENT (Vercel):
    - Siapkan environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`) di Vercel.
-   - Lakukan push ke repository GitHub dan deploy agar bisa diakses melalui URL publik untuk pengujian dosen/umum.
+   - Build lokal sudah lulus; lanjutkan deploy Vercel dari branch utama.
+   - Setelah deploy, lakukan smoke test: login/register, map update, add friend, kirim chat, ghost mode, install PWA.
 =======================================================================
