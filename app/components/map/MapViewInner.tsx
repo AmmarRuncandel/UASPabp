@@ -83,13 +83,17 @@ function makeUserIcon(): L.DivIcon {
 }
 
 function makeFriendIcon(initials: string, delay: number, isFriend: boolean): L.DivIcon {
-  const borderColor = isFriend ? '#FCD535' : '#848E9C';
-  const shadowColor = isFriend ? 'rgba(252,213,53,0.45)' : 'rgba(132,142,156,0.35)';
+  // STRICTLY enforce: Gold/Yellow for friends, Dark/Gray for strangers
+  const borderColor = isFriend ? '#FCD535' : '#4B5563';
+  const bgColor     = isFriend ? '#181A20'  : '#111318';
+  const textColor   = isFriend ? '#FCD535'  : '#9CA3AF';
+  const shadowColor = isFriend ? 'rgba(252,213,53,0.45)' : 'rgba(75,85,99,0.3)';
+  const pingColor   = isFriend ? `${borderColor}66` : `${borderColor}44`;
   return L.divIcon({
     html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;">
-             <span class="leaflet-ping-ring" style="animation-delay:${delay}s;border-color:${borderColor}66"></span>
-             <span class="leaflet-ping-ring" style="animation-delay:${delay + 1.1}s;border-color:${borderColor}66"></span>
-             <div style="width:36px;height:36px;border-radius:50%;background:#181A20;border:2px solid ${borderColor};color:${borderColor};font-size:11px;font-weight:700;font-family:Inter,sans-serif;display:flex;align-items:center;justify-content:center;box-shadow:0 0 12px ${shadowColor};cursor:pointer;">${initials}</div>
+             <span class="leaflet-ping-ring" style="animation-delay:${delay}s;border-color:${pingColor}"></span>
+             <span class="leaflet-ping-ring" style="animation-delay:${delay + 1.1}s;border-color:${pingColor}"></span>
+             <div style="width:36px;height:36px;border-radius:50%;background:${bgColor};border:2px solid ${borderColor};color:${textColor};font-size:11px;font-weight:700;font-family:Inter,sans-serif;display:flex;align-items:center;justify-content:center;box-shadow:0 0 12px ${shadowColor};cursor:pointer;">${initials}</div>
            </div>`,
     className: '',
     iconSize: [40, 40],
@@ -101,11 +105,13 @@ function makeFriendIcon(initials: string, delay: number, isFriend: boolean): L.D
 // ── Map controls inside MapContainer context ───────────────────────────────────
 function MapControls({
   isGhostMode,
-  nearbyCount,
+  strangerCount,
+  friendOnlineCount,
   userCenter,
 }: {
   isGhostMode: boolean;
-  nearbyCount: number;
+  strangerCount: number;
+  friendOnlineCount: number;
   userCenter: [number, number];
 }) {
   const map = useMap();
@@ -172,18 +178,34 @@ function MapControls({
         </motion.button>
       </div>
 
-      {/* Nearby count — bottom left */}
+      {/* Double spatial badges — bottom left */}
       <motion.div
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: 0.6 }}
-        className="glass absolute bottom-28 left-6 z-[1000] flex items-center gap-2 px-3 py-2 rounded-xl"
+        className="absolute bottom-28 left-6 z-[1000] flex flex-col gap-1.5"
         aria-live="polite"
       >
-        <MapPin size={14} style={{ color: 'var(--color-gold)' }} />
-        <span className="text-xs font-semibold" style={{ color: 'var(--color-primary)' }}>
-          {isGhostMode ? '—' : nearbyCount} {nearbyCount === 1 ? 'pengguna' : 'pengguna'} di sekitar
-        </span>
+        {/* Badge 1: Strangers ≤1km (is_friend === false) */}
+        <div
+          className="glass flex items-center gap-2 px-3 py-2 rounded-xl"
+          aria-label="Pengguna di sekitar"
+        >
+          <MapPin size={13} style={{ color: '#9CA3AF' }} />
+          <span className="text-xs font-semibold" style={{ color: '#D1D5DB' }}>
+            {isGhostMode ? '—' : strangerCount} pengguna di sekitar
+          </span>
+        </div>
+        {/* Badge 2: Online friends (is_friend === true) */}
+        <div
+          className="glass flex items-center gap-2 px-3 py-2 rounded-xl"
+          aria-label="Teman online"
+        >
+          <MapPin size={13} style={{ color: 'var(--color-gold)' }} />
+          <span className="text-xs font-semibold" style={{ color: 'var(--color-primary)' }}>
+            {isGhostMode ? '—' : friendOnlineCount} teman online
+          </span>
+        </div>
       </motion.div>
     </>
   );
@@ -383,7 +405,8 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
         <FlyToController target={flyTarget} />
         <MapControls
           isGhostMode={isGhostMode}
-          nearbyCount={visibleUsers.filter((u) => u.relation_type !== 'friend').length}
+          strangerCount={visibleUsers.filter((u) => u.relation_type === 'stranger').length}
+          friendOnlineCount={visibleUsers.filter((u) => u.relation_type === 'friend').length}
           userCenter={userPos}
         />
       </MapContainer>

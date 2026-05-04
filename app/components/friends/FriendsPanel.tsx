@@ -230,6 +230,9 @@ interface FriendsPanelProps {
   onStartChat: (friend: Friend) => void;
   onPendingCountChange: (count: number) => void;
   onFlyTo?: (friendId: string) => void;
+  onFriendsLoaded?: (friends: Friend[]) => void;
+  initialSearchId?: string | null;
+  onDeepLinkHandled?: () => void;
 }
 
 export function FriendsPanel({
@@ -238,6 +241,9 @@ export function FriendsPanel({
   onStartChat,
   onPendingCountChange,
   onFlyTo,
+  onFriendsLoaded,
+  initialSearchId,
+  onDeepLinkHandled,
 }: FriendsPanelProps) {
   const supabase  = createClient();
   const { toast } = useToast();
@@ -307,6 +313,13 @@ export function FriendsPanel({
   }, [supabase, currentUserId, onPendingCountChange]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Handle deep-link: pre-fill search with the target user ID
+  useEffect(() => {
+    if (!initialSearchId) return;
+    setSearch(initialSearchId);
+    onDeepLinkHandled?.();
+  }, [initialSearchId, onDeepLinkHandled]);
 
   useEffect(() => {
     if (!search.trim()) { setSearchResults([]); return; }

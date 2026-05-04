@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Image as ImageIcon, Smile, X, UploadCloud, Users } from 'lucide-react';
+import { Send, Image as ImageIcon, Smile, X, UploadCloud, Users, ChevronLeft, MessageCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChatSkeleton }     from '@/app/components/ui/Skeletons';
 import { ChatEmptyState }   from '@/app/components/ui/EmptyState';
@@ -17,6 +17,16 @@ import { createClient }     from '@/utils/supabase/client';
 import type { Message as DBMessage } from '@/utils/supabase/types';
 
 export interface ChatFriend { id: string; name: string; avatar: string; distance: string; }
+
+interface RecentChat {
+  friendId: string;
+  name: string;
+  avatar: string;
+  lastMessage: string;
+  lastTime: string;
+  ts: number;
+}
+
 interface UIMessage { id: string; text: string; sent: boolean; time: string; }
 
 const MAX_MSG = 10;
@@ -121,17 +131,68 @@ function NoFriendState({ onOpenFriends }: { onOpenFriends?: () => void }) {
   );
 }
 
+// -- Recent Chats View --
+function RecentChatsView({ friends, recentChats, onSelect, onClose }: {
+  friends: ChatFriend[];
+  recentChats: RecentChat[];
+  onSelect: (f: ChatFriend) => void;
+  onClose: () => void;
+}) {
+  const merged = friends.map((f) => {
+    const rc = recentChats.find((r) => r.friendId === f.id);
+    return { friend: f, lastMessage: rc?.lastMessage ?? '', lastTime: rc?.lastTime ?? '', ts: rc?.ts ?? 0 };
+  }).sort((a, b) => b.ts - a.ts);
+  return (
+    <motion.aside key="chat-list" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+      transition={{ type: 'spring', damping: 28, stiffness: 260 }}
+      className="fixed top-0 right-0 h-full flex flex-col z-30 bg-[#181A20]/80 backdrop-blur-xl border-l border-white/5"
+      style={{ width: 'clamp(300px, 380px, 100vw)' }} aria-label="Recent Chats">
+      <div className="flex items-center justify-between px-4 py-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
+        <h2 className="text-base font-bold" style={{ color: 'var(--color-primary)' }}>Obrolan</h2>
+        <button id="close-chat-panel" onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/5" style={{ color: 'var(--color-muted)' }} aria-label="Tutup"><X size={18} /></button>
+      </div>
+      <div className="flex-1 overflow-y-auto py-2">
+        {merged.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-16 px-6 text-center">
+            <MessageCircle size={36} style={{ color: 'rgba(252,213,53,0.4)' }} strokeWidth={1.4} />
+            <p className="text-sm" style={{ color: 'var(--color-muted)' }}>Belum ada teman untuk diajak chat.</p>
+          </div>
+        ) : merged.map(({ friend, lastMessage, lastTime }) => (
+          <motion.button key={friend.id} whileHover={{ backgroundColor: 'rgba(255,255,255,0.04)' }}
+            onClick={() => onSelect(friend)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-left">
+            <div className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
+              style={{ background: 'var(--color-gold)', color: 'var(--color-base)' }}>{friend.avatar}</div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold truncate" style={{ color: 'var(--color-primary)' }}>{friend.name}</p>
+                {lastTime && <span className="text-[10px] flex-shrink-0 ml-2" style={{ color: 'var(--color-muted)' }}>{lastTime}</span>}
+              </div>
+              <p className="text-xs truncate mt-0.5" style={{ color: 'var(--color-muted)' }}>
+                {lastMessage.startsWith('[IMAGE]:') ? '?? Gambar' : lastMessage || 'Belum ada pesan'}
+              </p>
+            </div>
+          </motion.button>
+        ))}
+      </div>
+    </motion.aside>
+  );
+}
 interface ChatPanelProps {
   friend: ChatFriend;
+  friends?: ChatFriend[];
   currentUserId: string;
   onClose: () => void;
   onOpenFriends?: () => void;
 }
 
-export function ChatPanel({ friend, currentUserId, onClose, onOpenFriends }: ChatPanelProps) {
+export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, onClose, onOpenFriends }: ChatPanelProps) {
   const supabase  = createClient();
   const { play }  = useSound();
 
+  const [friend,      setFriend]     = useState<ChatFriend>(initialFriend);
+  const [chatView,    setChatView]   = useState<'list' | 'chat'>(initialFriend.id ? 'chat' : 'list');
+  const [recentChats, setRecentChats] = useState<RecentChat[]>([]);
   const [messages,   setMessages]   = useState<UIMessage[]>([]);
   const [input,      setInput]      = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
@@ -205,6 +266,39 @@ export function ChatPanel({ friend, currentUserId, onClose, onOpenFriends }: Cha
 
   const hasFriend = Boolean(friend.id);
 
+  // Sync friend from prop when it changes externally
+  useEffect(() => {
+    if (initialFriend.id) { setFriend(initialFriend); setChatView('chat'); }
+  }, [initialFriend.id]);
+
+  // Load recent chats metadata for list view
+  useEffect(() => {
+    if (!currentUserId || friends.length === 0) return;
+    async function fetchRecent() {
+      const results: RecentChat[] = [];
+      for (const f of friends) {
+        const { data } = await supabase
+          .from('messages')
+          .select('content, created_at')
+          .or(
+            `and(sender_id.eq.${currentUserId},receiver_id.eq.${f.id}),` +
+            `and(sender_id.eq.${f.id},receiver_id.eq.${currentUserId})`
+          )
+          .order('created_at', { ascending: false })
+          .limit(1);
+        const last = data?.[0];
+        results.push({
+          friendId: f.id, name: f.name, avatar: f.avatar,
+          lastMessage: last?.content ?? '',
+          lastTime: last?.created_at ? fmtTime(last.created_at) : '',
+          ts: last?.created_at ? new Date(last.created_at).getTime() : 0,
+        });
+      }
+      setRecentChats(results);
+    }
+    fetchRecent();
+  }, [currentUserId, friends, supabase]);
+
   const loadMessages = useCallback(async () => {
     if (!friend.id) return;
     setIsLoading(true);
@@ -220,7 +314,7 @@ export function ChatPanel({ friend, currentUserId, onClose, onOpenFriends }: Cha
 
     if (data) {
       setMessages((data as DBMessage[]).map((m) => ({
-        id: m.id, text: m.content, sent: m.sender_id === currentUserId, time: fmtTime(m.created_at),
+        id: m.id, text: m.content, sent: m.sender_id === currentUserId, time: m.created_at ? fmtTime(m.created_at) : fmtTime(new Date().toISOString()),
       })));
     }
     setIsLoading(false);
@@ -240,7 +334,7 @@ export function ChatPanel({ friend, currentUserId, onClose, onOpenFriends }: Cha
         (payload) => {
           const m = payload.new as DBMessage;
           if (m.sender_id !== friend.id) return;
-          setMessages((prev) => [...prev, { id: m.id, text: m.content, sent: false, time: fmtTime(m.created_at) }].slice(-MAX_MSG));
+          setMessages((prev) => [...prev, { id: m.id, text: m.content, sent: false, time: m.created_at ? fmtTime(m.created_at) : fmtTime(new Date().toISOString()) }].slice(-MAX_MSG));
         })
       .subscribe();
     channelRef.current = ch;

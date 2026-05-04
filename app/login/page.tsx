@@ -10,7 +10,7 @@
  */
 
 import { useState, FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Eye, EyeOff, Loader2, ArrowRight, AlertCircle } from 'lucide-react';
 import { createClient } from '@/utils/supabase/client';
@@ -96,8 +96,9 @@ function Field({
 
 // ── Halaman Utama ─────────────────────────────────────────────────────────────
 export default function LoginPage() {
-  const router   = useRouter();
-  const supabase = createClient();
+  const router       = useRouter();
+  const searchParams = useSearchParams();
+  const supabase     = createClient();
 
   const [mode,       setMode]       = useState<Mode>('login');
   const [prevMode,   setPrevMode]   = useState<Mode>('login');
@@ -134,7 +135,8 @@ export default function LoginPage() {
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        router.push('/');
+        const next = searchParams?.get('next');
+        router.push(next && next.startsWith('/') ? next : '/');
         router.refresh();
       }
     } catch (err: unknown) {

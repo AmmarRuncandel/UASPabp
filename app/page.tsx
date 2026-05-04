@@ -15,7 +15,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
 
 import { MapView }      from '@/app/components/map/MapView';
@@ -49,8 +49,9 @@ function profileToFriend(profile: Profile): Friend {
 }
 
 export default function Home() {
-  const router   = useRouter();
-  const supabase = createClient();
+  const router       = useRouter();
+  const searchParams = useSearchParams();
+  const supabase     = createClient();
 
   const [user,        setUser]        = useState<User | null>(null);
   const [profile,     setProfile]     = useState<Profile | null>(null);
@@ -58,12 +59,14 @@ export default function Home() {
   const [isGhostMode, setIsGhostMode] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [focusedProfileId, setFocusedProfileId] = useState<string | null>(null);
+  const [deepLinkFriendId, setDeepLinkFriendId] = useState<string | null>(null);
   const [showProfileCompletion, setShowProfileCompletion] = useState(false);
 
   const [activeChatFriend, setActiveChatFriend] = useState<ChatFriend>({
     id: '', name: 'Friend', avatar: '?', distance: '—',
   });
   const [chatPendingCount, setChatPendingCount] = useState(0);
+  const [chatFriendsList, setChatFriendsList] = useState<ChatFriend[]>([]);
 
   // ── Resolve session ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -99,6 +102,17 @@ export default function Home() {
   }, []);
 
   
+
+  // Handle ?addFriend deep-link: open FriendsPanel and pre-fill search
+  useEffect(() => {
+    const addFriendId = searchParams?.get('addFriend');
+    if (addFriendId && user) {
+      setDeepLinkFriendId(addFriendId);
+      setActivePanel('friends');
+      // Clean URL without reloading
+      window.history.replaceState({}, '', '/');
+    }
+  }, [searchParams, user]);
 
   // Clear chat pending when Chat panel becomes active
   useEffect(() => {
