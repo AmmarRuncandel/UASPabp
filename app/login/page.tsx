@@ -9,7 +9,7 @@
  * • Semua teks dalam Bahasa Indonesia
  */
 
-import { useState, FormEvent } from 'react';
+import { Suspense, useState, FormEvent } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Eye, EyeOff, Loader2, ArrowRight, AlertCircle } from 'lucide-react';
@@ -94,8 +94,7 @@ function Field({
   );
 }
 
-// ── Halaman Utama ─────────────────────────────────────────────────────────────
-export default function LoginPage() {
+function LoginContent() {
   const router       = useRouter();
   const searchParams = useSearchParams();
   const supabase     = createClient();
@@ -325,5 +324,14 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Halaman Utama ─────────────────────────────────────────────────────────────
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gold-400">Memuat...</div>}>
+      <LoginContent />
+    </Suspense>
   );
 }
