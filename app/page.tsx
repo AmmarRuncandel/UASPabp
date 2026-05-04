@@ -14,7 +14,7 @@
  *  z-20  NavBar         — bottom floating pill
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
 
@@ -49,6 +49,18 @@ function profileToFriend(profile: Profile): Friend {
 }
 
 export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="h-screen w-full bg-slate-950 flex items-center justify-center text-gold-400">
+        Memuat Peta...
+      </div>
+    }>
+      <DashboardContent />
+    </Suspense>
+  );
+}
+
+function DashboardContent() {
   const router       = useRouter();
   const searchParams = useSearchParams();
   const supabase     = createClient();
