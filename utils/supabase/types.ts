@@ -54,4 +54,6 @@ export interface VisibleUser {
   last_lng: number;
   updated_at: string | null;
   relation_type: 'friend' | 'stranger'; // discriminator returned by the RPC
+  /** Optionally returned by RPC for explicit friend discriminator */
+  is_friend?: boolean;
 }

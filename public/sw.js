@@ -1,146 +1,168 @@
 /**
- * Service Worker untuk Zmayy PWA — v2
- * ─────────────────────────────────────
- * • Precache UI shell assets (cache busting: bump CACHE_NAME setiap deploy besar)
- * • Cache-first strategy untuk static assets & _next/static
- * • Network-first untuk API calls (supabase / internal /api)
- * • Navigation fallback: offline → serve cached '/' shell
- * • Offline HTML fallback untuk non-navigasi request
+ * Service Worker — Zmayy PWA v3
+ * ─────────────────────────────────────────────────────────────────
+ * Strategies:
+ *  • install      : precache app shell + self.skipWaiting()
+ *  • activate     : prune old caches + self.clients.claim()
+ *  • fetch        :
+ *      - cross-origin           → passthrough (Supabase, tile CDNs, QR API)
+ *      - /api/*                 → network-first, cache on success
+ *      - /_next/static/*        → cache-first (immutable hashed bundles)
+ *      - HTML navigation        → network-first, offline shell fallback
+ *      - everything else        → cache-first, then network, then 503
+ *  • message      : SKIP_WAITING on demand (used by update prompt)
+ *
+ * Bump CACHE_VERSION on every production deploy to bust stale caches.
  */
 
-const CACHE_NAME = 'zmayy-v2';
+const CACHE_VERSION = 'zmayy-v3';
 
-/** Assets yang pasti di-precache saat install */
+/** Minimal app shell — must all respond with 200 at install time */
 const SHELL_URLS = [
   '/',
-  '/offline.html',
   '/manifest.json',
   '/images/zmay_logo.png',
 ];
 
-// ── Install: cache shell ────────────────────────────────────────────────────
+// ── Install ─────────────────────────────────────────────────────────────────
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('[SW] Precaching app shell');
-      return cache.addAll(SHELL_URLS).catch((err) => {
-        // Non-fatal: some assets might not exist yet
-        console.warn('[SW] Some shell assets could not be cached:', err);
-      });
-    }).then(() => self.skipWaiting())
+    caches
+      .open(CACHE_VERSION)
+      .then((cache) => {
+        // addAll is all-or-nothing; we wrap each entry individually so a
+        // single missing asset doesn't abort the entire install.
+        return Promise.allSettled(
+          SHELL_URLS.map((url) =>
+            cache.add(url).catch((err) => {
+              console.warn('[SW] Could not precache:', url, err);
+            })
+          )
+        );
+      })
+      .then(() => {
+        console.log('[SW] Install complete — skipping wait');
+        return self.skipWaiting();
+      })
   );
 });
 
-// ── Activate: delete stale caches ──────────────────────────────────────────
+// ── Activate ─────────────────────────────────────────────────────────────────
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) =>
-      Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME)
-          .map((name) => {
-            console.log('[SW] Deleting old cache:', name);
-            return caches.delete(name);
-          })
+    caches
+      .keys()
+      .then((names) =>
+        Promise.all(
+          names
+            .filter((name) => name !== CACHE_VERSION)
+            .map((name) => {
+              console.log('[SW] Removing old cache:', name);
+              return caches.delete(name);
+            })
+        )
       )
-    ).then(() => self.clients.claim())
+      .then(() => {
+        console.log('[SW] Activate complete — claiming clients');
+        return self.clients.claim();
+      })
   );
 });
 
-// ── Fetch: routing strategy ─────────────────────────────────────────────────
+// ── Fetch ─────────────────────────────────────────────────────────────────────
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  const url = new URL(request.url);
 
-  // Only handle GET
+  // Only intercept GET
   if (request.method !== 'GET') return;
 
-  // ── 1. Skip cross-origin requests (Supabase, QR API, Leaflet tiles, etc.)
+  const url = new URL(request.url);
+
+  // ── 1. Passthrough: cross-origin (Supabase realtime, map tiles, QR API…)
   if (url.origin !== self.location.origin) return;
 
-  // ── 2. Network-first for internal API routes
+  // ── 2. Network-first: internal API routes
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(request, clone));
+        .then((res) => {
+          if (res.ok) {
+            caches.open(CACHE_VERSION).then((c) => c.put(request, res.clone()));
           }
-          return response;
+          return res;
         })
         .catch(() =>
-          caches.match(request).then(
-            (cached) => cached ?? new Response('Offline — API não disponível', { status: 503 })
-          )
+          caches
+            .match(request)
+            .then((cached) => cached ?? new Response('Offline', { status: 503 }))
         )
     );
     return;
   }
 
-  // ── 3. Cache-first for _next/static (immutable hashed bundles)
+  // ── 3. Cache-first: Next.js hashed static bundles (immutable)
   if (url.pathname.startsWith('/_next/static/')) {
     event.respondWith(
       caches.match(request).then((cached) => {
         if (cached) return cached;
-        return fetch(request).then((response) => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(request, clone));
+        return fetch(request).then((res) => {
+          if (res.ok) {
+            caches.open(CACHE_VERSION).then((c) => c.put(request, res.clone()));
           }
-          return response;
+          return res;
         });
       })
     );
     return;
   }
 
-  // ── 4. HTML navigation: network-first with '/' shell fallback
+  // ── 4. Network-first: HTML navigation — offline shell fallback
   if (request.headers.get('accept')?.includes('text/html')) {
     event.respondWith(
       fetch(request)
-        .then((response) => {
-          // Cache navigations so root shell is available offline
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(request, clone));
+        .then((res) => {
+          if (res.ok) {
+            caches.open(CACHE_VERSION).then((c) => c.put(request, res.clone()));
           }
-          return response;
+          return res;
         })
         .catch(async () => {
-          // Try exact match first, then root shell, then offline page
-          const exact  = await caches.match(request);
+          const exact = await caches.match(request);
           if (exact) return exact;
-          const shell  = await caches.match('/');
+          const shell = await caches.match('/');
           if (shell) return shell;
-          const offline = await caches.match('/offline.html');
-          return offline ?? new Response('Offline', { status: 503, headers: { 'Content-Type': 'text/html' } });
+          return new Response(
+            '<!DOCTYPE html><html><head><title>Offline — Zmayy</title></head>' +
+            '<body style="background:#0B0E11;color:#FCD535;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">' +
+            '<p>Kamu sedang offline. Sambungkan internet dan muat ulang halaman.</p></body></html>',
+            { status: 503, headers: { 'Content-Type': 'text/html' } }
+          );
         })
     );
     return;
   }
 
-  // ── 5. Cache-first for everything else (images, fonts, icons…)
+  // ── 5. Cache-first: images, fonts, icons, manifests
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;
-
       return fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(request, clone));
+        .then((res) => {
+          if (res.ok) {
+            caches.open(CACHE_VERSION).then((c) => c.put(request, res.clone()));
           }
-          return response;
+          return res;
         })
         .catch(() => new Response('Offline', { status: 503 }));
     })
   );
 });
 
-// ── Message handler (SKIP_WAITING from update prompt) ──────────────────────
+// ── Message ───────────────────────────────────────────────────────────────────
+// Allows the app to trigger SW updates on demand (e.g. after a new deploy).
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
+  if (event.data?.type === 'SKIP_WAITING') {
+    console.log('[SW] SKIP_WAITING received — activating new worker');
     self.skipWaiting();
   }
 });

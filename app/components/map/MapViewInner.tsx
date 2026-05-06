@@ -183,7 +183,7 @@ function MapControls({
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: 0.6 }}
-        className="absolute bottom-28 left-6 z-[1000] flex flex-col gap-1.5"
+        className="absolute bottom-28 left-6 z-[1000] flex flex-col gap-2"
         aria-live="polite"
       >
         {/* Badge 1: Strangers ≤1km (is_friend === false) */}
@@ -341,7 +341,8 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
   visibleUsers.forEach((u, i) => {
     if (!friendIconMap.current.has(u.id)) {
       const initials = u.avatar_initials ?? (u.username?.slice(0, 2).toUpperCase() ?? '??');
-      const isFriend = u.relation_type === 'friend';
+      // STRICT: rely on explicit is_friend flag from RPC payload
+      const isFriend = Boolean((u as any).is_friend === true || u.is_friend === true || u.relation_type === 'friend');
       friendIconMap.current.set(u.id, makeFriendIcon(initials, (i % 4) * 0.55, isFriend));
     }
   });

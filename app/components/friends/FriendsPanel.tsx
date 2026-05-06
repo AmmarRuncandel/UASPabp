@@ -26,6 +26,7 @@ export interface Friend {
   isPending?: boolean;
   friendshipId?: string;
   battery?: number;
+  isGhost?: boolean;
 }
 
 function PingRipple({ delay = 0 }: { delay?: number }) {
@@ -230,7 +231,6 @@ interface FriendsPanelProps {
   onStartChat: (friend: Friend) => void;
   onPendingCountChange: (count: number) => void;
   onFlyTo?: (friendId: string) => void;
-  onFriendsLoaded?: (friends: Friend[]) => void;
   initialSearchId?: string | null;
   onDeepLinkHandled?: () => void;
 }
@@ -241,7 +241,6 @@ export function FriendsPanel({
   onStartChat,
   onPendingCountChange,
   onFlyTo,
-  onFriendsLoaded,
   initialSearchId,
   onDeepLinkHandled,
 }: FriendsPanelProps) {
@@ -263,8 +262,8 @@ export function FriendsPanel({
       .from('friendships')
       .select(`
         id, requester_id, addressee_id, status,
-        requester:profiles!friendships_requester_id_fkey(id, username, display_name, avatar_initials),
-        addressee:profiles!friendships_addressee_id_fkey(id, username, display_name, avatar_initials)
+        requester:profiles!friendships_requester_id_fkey(id, username, display_name, avatar_initials, last_lat, last_lng, is_ghost_mode),
+        addressee:profiles!friendships_addressee_id_fkey(id, username, display_name, avatar_initials, last_lat, last_lng, is_ghost_mode)
       `)
       .eq('status', 'accepted')
       .or(`requester_id.eq.${currentUserId},addressee_id.eq.${currentUserId}`);
@@ -273,7 +272,7 @@ export function FriendsPanel({
       .from('friendships')
       .select(`
         id, requester_id, status,
-        requester:profiles!friendships_requester_id_fkey(id, username, display_name, avatar_initials)
+        requester:profiles!friendships_requester_id_fkey(id, username, display_name, avatar_initials, last_lat, last_lng, is_ghost_mode)
       `)
       .eq('status', 'pending')
       .eq('addressee_id', currentUserId);
@@ -285,6 +284,7 @@ export function FriendsPanel({
       status:       (profile.last_lat !== null ? 'nearby' : 'online') as Friend['status'],
       isPending,
       friendshipId: row.id as string,
+      isGhost: Boolean((profile as any).is_ghost_mode === true || profile.is_ghost_mode === true),
     });
 
     const rawFriends: Friend[] = (acceptedRows ?? []).map((row) => {
@@ -312,23 +312,62 @@ export function FriendsPanel({
     setIsLoading(false);
   }, [supabase, currentUserId, onPendingCountChange]);
 
+  // Wrapper for fly-to: prevents panning when friend is in ghost mode
+  const handleFlyTo = useCallback((friendId: string) => {
+    const f = friends.find((x) => x.id === friendId);
+    if (!f) return;
+    if (f.isGhost) {
+      toast({ variant: 'error', title: 'Tidak dapat melacak', description: 'Pengguna ini sedang mengaktifkan Mode Hantu.' });
+      return;
+    }
+    onFlyTo?.(friendId);
+  }, [friends, onFlyTo, toast]);
+
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Handle deep-link: pre-fill search with the target user ID
+  // ── Handle deep-link: resolve UUID → fetch exact profile by ID ────────────
+  // Bypasses the username search entirely — a UUID will never match `ilike('username')`.
   useEffect(() => {
     if (!initialSearchId) return;
-    setSearch(initialSearchId);
-    onDeepLinkHandled?.();
-  }, [initialSearchId, onDeepLinkHandled]);
+    let cancelled = false;
+    setSearching(true);
+
+    supabase
+      .from('profiles')
+      .select('id, username, display_name, avatar_initials, last_lat, last_lng')
+      .eq('id', initialSearchId)
+      .neq('id', currentUserId)
+      .single()
+      .then(({ data }) => {
+        if (cancelled) return;
+        setSearchResults(data ? [data as Profile] : []);
+        // Set a human-readable display label in the search bar
+        setSearch((data as Profile | null)?.username ?? initialSearchId);
+        setSearching(false);
+        onDeepLinkHandled?.();
+      });
+
+    return () => { cancelled = true; };
+  // Only run once when initialSearchId changes — not on every search keystroke
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSearchId]);
+
+  // ── Username search (debounced, skipped while deep-link results are shown) ─
+  // We detect a UUID pattern so a deep-link ID never leaks into the ilike path.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   useEffect(() => {
-    if (!search.trim()) { setSearchResults([]); return; }
+    const q = search.trim();
+    if (!q) { setSearchResults([]); return; }
+    // Skip ilike search when the query looks like a UUID (deep-link scenario)
+    if (UUID_RE.test(q)) return;
+
     const t = setTimeout(async () => {
       setSearching(true);
       const { data } = await supabase
         .from('profiles')
         .select('id, username, display_name, avatar_initials, last_lat, last_lng')
-        .ilike('username', `%${search.trim()}%`)
+        .ilike('username', `%${q}%`)
         .neq('id', currentUserId)
         .limit(8);
       setSearchResults((data ?? []) as Profile[]);
@@ -435,7 +474,7 @@ export function FriendsPanel({
           ) : (
             <motion.div key={activeTab} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               {list.map((f) => (
-                <FriendCard key={f.id} friend={f} onStartChat={onStartChat} onAccept={handleAccept} onFlyTo={onFlyTo} />
+                <FriendCard key={f.id} friend={f} onStartChat={onStartChat} onAccept={handleAccept} onFlyTo={handleFlyTo} />
               ))}
             </motion.div>
           )}

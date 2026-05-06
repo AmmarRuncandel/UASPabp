@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Image as ImageIcon, Smile, X, UploadCloud, Users, ChevronLeft, MessageCircle } from 'lucide-react';
+import { Send, Image as ImageIcon, X, UploadCloud, Users, ChevronLeft, MessageCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChatSkeleton }     from '@/app/components/ui/Skeletons';
 import { ChatEmptyState }   from '@/app/components/ui/EmptyState';
@@ -27,7 +27,7 @@ interface RecentChat {
   ts: number;
 }
 
-interface UIMessage { id: string; text: string; sent: boolean; time: string; }
+interface UIMessage { id: string; text: string; sent: boolean; time: string; createdAt: string; }
 
 const MAX_MSG = 10;
 const RING_R  = 18;
@@ -184,15 +184,18 @@ interface ChatPanelProps {
   currentUserId: string;
   onClose: () => void;
   onOpenFriends?: () => void;
+  /** Respects profile.notify_sound — defaults to true */
+  soundEnabled?: boolean;
 }
 
-export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, onClose, onOpenFriends }: ChatPanelProps) {
+export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, onClose, onOpenFriends, soundEnabled = true }: ChatPanelProps) {
   const supabase  = createClient();
   const { play }  = useSound();
 
   const [friend,      setFriend]     = useState<ChatFriend>(initialFriend);
   const [chatView,    setChatView]   = useState<'list' | 'chat'>(initialFriend.id ? 'chat' : 'list');
   const [recentChats, setRecentChats] = useState<RecentChat[]>([]);
+  const [friendsList, setFriendsList] = useState<ChatFriend[]>([]);
   const [messages,   setMessages]   = useState<UIMessage[]>([]);
   const [input,      setInput]      = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
@@ -215,9 +218,9 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
     const filePath = `chat_uploads/${currentUserId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
 
     // Optimistic UI placeholder while uploading
-    const opt: UIMessage = { id: `opt-${Date.now()}`, text: '[IMAGE_UPLOADING]', sent: true, time: fmtTime(new Date().toISOString()) };
+    const opt: UIMessage = { id: `opt-${Date.now()}`, text: '[IMAGE_UPLOADING]', sent: true, time: fmtTime(new Date().toISOString()), createdAt: new Date().toISOString() };
     setMessages((prev) => [...prev, opt].slice(-MAX_MSG));
-    play('send');
+    if (soundEnabled) play('send');
 
     try {
       const { error: uploadError } = await supabase.storage.from('chat_images').upload(filePath, file, { cacheControl: '3600', upsert: false });
@@ -271,12 +274,43 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
     if (initialFriend.id) { setFriend(initialFriend); setChatView('chat'); }
   }, [initialFriend.id]);
 
+  // Load friends list for Recent Chats view
+  useEffect(() => {
+    if (!currentUserId) return;
+    let mounted = true;
+    async function fetchFriends() {
+      const { data } = await supabase
+        .from('friendships')
+        .select(`
+          id, requester_id, addressee_id, status,
+          requester:profiles!friendships_requester_id_fkey(id, username, display_name, avatar_initials, last_lat, last_lng),
+          addressee:profiles!friendships_addressee_id_fkey(id, username, display_name, avatar_initials, last_lat, last_lng)
+        `)
+        .eq('status', 'accepted')
+        .or(`requester_id.eq.${currentUserId},addressee_id.eq.${currentUserId}`);
+
+      const list: ChatFriend[] = (data ?? []).map((row: any) => {
+        const isRequester = row.requester_id === currentUserId;
+        const profile = isRequester ? row.addressee : row.requester;
+        return {
+          id: profile.id,
+          name: profile.display_name ?? profile.username ?? 'Pengguna',
+          avatar: profile.avatar_initials ?? (profile.username?.slice(0, 2).toUpperCase() ?? '?'),
+          distance: profile.last_lat !== null && profile.last_lng !== null ? '< 1 km' : 'Offline',
+        };
+      });
+      if (mounted) setFriendsList(list);
+    }
+    fetchFriends();
+    return () => { mounted = false; };
+  }, [supabase, currentUserId]);
+
   // Load recent chats metadata for list view
   useEffect(() => {
-    if (!currentUserId || friends.length === 0) return;
+    if (!currentUserId || friendsList.length === 0) return;
     async function fetchRecent() {
       const results: RecentChat[] = [];
-      for (const f of friends) {
+      for (const f of friendsList) {
         const { data } = await supabase
           .from('messages')
           .select('content, created_at')
@@ -297,7 +331,7 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
       setRecentChats(results);
     }
     fetchRecent();
-  }, [currentUserId, friends, supabase]);
+  }, [currentUserId, friendsList, supabase]);
 
   const loadMessages = useCallback(async () => {
     if (!friend.id) return;
@@ -313,8 +347,14 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
       .limit(MAX_MSG);
 
     if (data) {
-      setMessages((data as DBMessage[]).map((m) => ({
-        id: m.id, text: m.content, sent: m.sender_id === currentUserId, time: m.created_at ? fmtTime(m.created_at) : fmtTime(new Date().toISOString()),
+      const threshold = Date.now() - 3 * 60 * 60 * 1000;
+      const filtered = (data as DBMessage[]).filter((m) => new Date(m.created_at).getTime() > threshold);
+      setMessages(filtered.map((m) => ({
+        id: m.id,
+        text: m.content,
+        sent: m.sender_id === currentUserId,
+        time: m.created_at ? fmtTime(m.created_at) : fmtTime(new Date().toISOString()),
+        createdAt: m.created_at ?? new Date().toISOString(),
       })));
     }
     setIsLoading(false);
@@ -334,7 +374,9 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
         (payload) => {
           const m = payload.new as DBMessage;
           if (m.sender_id !== friend.id) return;
-          setMessages((prev) => [...prev, { id: m.id, text: m.content, sent: false, time: m.created_at ? fmtTime(m.created_at) : fmtTime(new Date().toISOString()) }].slice(-MAX_MSG));
+          const threshold = Date.now() - 3 * 60 * 60 * 1000;
+          if (new Date(m.created_at).getTime() <= threshold) return;
+          setMessages((prev) => [...prev, { id: m.id, text: m.content, sent: false, time: m.created_at ? fmtTime(m.created_at) : fmtTime(new Date().toISOString()), createdAt: m.created_at ?? new Date().toISOString() }].slice(-MAX_MSG));
         })
       .subscribe();
     channelRef.current = ch;
@@ -374,10 +416,11 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
   async function sendMessage() {
     const text = input.trim();
     if (!text || !friend.id) return;
-    const opt: UIMessage = { id: `opt-${Date.now()}`, text, sent: true, time: fmtTime(new Date().toISOString()) };
+    const now = new Date().toISOString();
+    const opt: UIMessage = { id: `opt-${Date.now()}`, text, sent: true, time: fmtTime(now), createdAt: now };
     setMessages((prev) => [...prev, opt].slice(-MAX_MSG));
     setInput('');
-    play('send');
+    if (soundEnabled) play('send');
     const { error } = await supabase.from('messages').insert({ sender_id: currentUserId, receiver_id: friend.id, content: text });
     if (error) setMessages((prev) => prev.filter((m) => m.id !== opt.id));
   }
@@ -388,25 +431,15 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
 
   const remaining = MAX_MSG - messages.length;
 
-  // ── No friend selected: show actionable empty state ────────────────────────
-  if (!hasFriend) {
+  // If user is viewing Recent Chats list, render that view (never an empty screen)
+  if (chatView === 'list') {
     return (
-      <motion.aside
-        key="chat-panel-empty"
-        initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
-        transition={{ type: 'spring', damping: 28, stiffness: 260 }}
-        className="fixed top-0 right-0 h-full flex flex-col z-30 bg-[#181A20]/80 backdrop-blur-xl border-l border-white/5"
-        style={{ width: 'clamp(300px, 380px, 100vw)' }}
-        aria-label="Panel obrolan"
-      >
-        <div className="flex items-center justify-between px-4 py-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <h2 className="text-base font-bold" style={{ color: 'var(--color-primary)' }}>Obrolan</h2>
-          <button id="close-chat-panel" onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/5" style={{ color: 'var(--color-muted)' }} aria-label="Tutup obrolan">
-            <X size={18} />
-          </button>
-        </div>
-        <NoFriendState onOpenFriends={onOpenFriends} />
-      </motion.aside>
+      <RecentChatsView
+        friends={friendsList}
+        recentChats={recentChats}
+        onSelect={(f) => { setFriend(f); setChatView('chat'); }}
+        onClose={onClose}
+      />
     );
   }
 
@@ -439,6 +472,11 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
 
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
+        {chatView === 'chat' && (
+          <button id="chat-back-btn" onClick={() => setChatView('list')} className="p-2 rounded-md hover:bg-white/5" style={{ color: 'var(--color-muted)' }} aria-label="Kembali ke daftar obrolan">
+            <ChevronLeft size={18} />
+          </button>
+        )}
         <EphemeralRing count={messages.length} avatar={friend.avatar} />
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-sm truncate" style={{ color: 'var(--color-primary)' }}>{friend.name}</p>
@@ -466,14 +504,17 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
         <AnimatePresence mode="wait">
           {isLoading === true ? (
             <motion.div key="sk" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><ChatSkeleton /></motion.div>
-          ) : messages.length === 0 ? (
-            <ChatEmptyState key="empty" />
-          ) : (
-            <motion.div key="msgs" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="px-4 py-4 space-y-1">
-              {messages.map((msg) => <ChatBubble key={msg.id} message={msg} />)}
-              <div ref={bottomRef} />
-            </motion.div>
-          )}
+          ) : (() => {
+            const threshold = Date.now() - 3 * 60 * 60 * 1000;
+            const visibleMessages = messages.filter((m) => new Date(m.createdAt).getTime() > threshold);
+            if (visibleMessages.length === 0) return <ChatEmptyState key="empty" />;
+            return (
+              <motion.div key="msgs" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="px-4 py-4 space-y-1">
+                {visibleMessages.map((msg) => <ChatBubble key={msg.id} message={msg} />)}
+                <div ref={bottomRef} />
+              </motion.div>
+            );
+          })()}
         </AnimatePresence>
       </div>
 
@@ -521,11 +562,8 @@ export function ChatPanel({ friend: initialFriend, friends = [], currentUserId, 
         )}
       </AnimatePresence>
 
-      {/* Input row — Mic REMOVED, only Emoji + Input + Send */}
+      {/* Input row */}
       <div className="flex items-center gap-2 px-4 py-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
-        <button id="chat-emoji-btn" className="p-2 rounded-lg hover:bg-white/5" style={{ color: 'var(--color-muted)' }} aria-label="Pilih emoji">
-          <Smile size={18} />
-        </button>
         <input
           id="chat-input"
           type="text"

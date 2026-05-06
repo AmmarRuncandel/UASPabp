@@ -31,33 +31,44 @@ const NAV_ITEMS = [
 export function NavBar({ activeSidebar, onToggle, isGhostMode, pendingCount = 0 }: NavBarProps) {
   const { toast } = useToast();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [showInstallBanner, setShowInstallBanner] = useState(true);
+  // Starts hidden — only revealed once the browser fires beforeinstallprompt
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
 
   useEffect(() => {
+    // Show banner when Chrome decides the app is installable
     function handleBeforeInstallPrompt(event: Event) {
-      event.preventDefault();
+      event.preventDefault(); // prevent mini-infobar on mobile
       setInstallPrompt(event as BeforeInstallPromptEvent);
       setShowInstallBanner(true);
     }
 
+    // Hide banner permanently once the user has installed the app
+    function handleAppInstalled() {
+      setInstallPrompt(null);
+      setShowInstallBanner(false);
+      console.log('[PWA] App installed successfully');
+    }
+
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
   }, []);
 
   async function handleInstallClick() {
-    if (!installPrompt) {
-      toast({
-        variant: 'info',
-        title: 'Instalasi aplikasi belum siap',
-        description: 'Tambahkan manifest dan service worker untuk mengaktifkan instalasi PWA di browser.',
-      });
-      return;
+    if (!installPrompt) return; // guard: shouldn't be reachable since banner only shows when prompt exists
+    try {
+      installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice;
+      if (outcome === 'accepted') {
+        toast({ variant: 'success', title: 'Zmayy terpasang!', description: 'Buka dari layar utama perangkatmu.' });
+      }
+    } finally {
+      setInstallPrompt(null);
+      setShowInstallBanner(false);
     }
-
-    installPrompt.prompt();
-    await installPrompt.userChoice;
-    setInstallPrompt(null);
-    setShowInstallBanner(false);
   }
 
   const { count: chatPendingCount } = useChatNotifications();

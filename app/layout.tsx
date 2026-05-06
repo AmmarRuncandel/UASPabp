@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { ToastProvider }   from '@/app/components/ui/Toast';
@@ -15,30 +15,46 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Zmayy Social Mapping App",
+  title: "Zmayy — Social Mapping & Real-Time Chat",
   description:
-    "Zmayy is a premium social mapping application. Discover friends near you, share your location, and chat in real time.",
+    "Temukan teman di sekitarmu, bagikan lokasi, dan chat secara real-time dengan Zmayy social mapping.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Zmayy",
+  },
   icons: {
     icon: [
-      { rel: 'icon', url: '/images/zmay_logo.png' },
-      { rel: 'apple-touch-icon', url: '/images/zmay_logo.png' },
+      { rel: 'icon',             url: '/images/zmay_logo.png', type: 'image/png' },
+      { rel: 'apple-touch-icon', url: '/images/zmay_logo.png', type: 'image/png' },
     ],
   },
+};
+
+/**
+ * Viewport must be exported separately from metadata in Next.js App Router.
+ * Chrome's PWA installability check requires width=device-width + initial-scale=1.
+ */
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  minimumScale: 1,
+  maximumScale: 5,
+  viewportFit: 'cover',
+  themeColor: '#0B0E11',
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${inter.variable} h-full`}>
+    <html lang="id" className={`${inter.variable} h-full`}>
       <head>
+        {/* PWA manifest — also set via metadata.manifest but belt-and-suspenders */}
         <link rel="manifest" href="/manifest.json" />
-        <link rel="icon" type="image/png" href="/images/zmay_logo.png" />
-        <meta name="theme-color" content="#0B0E11" />
+        {/* Apple PWA meta tags not yet covered by Next.js appleWebApp */}
         <meta name="mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <meta name="apple-mobile-web-app-title" content="Zmayy" />
       </head>
       <body className="h-full overflow-hidden">
         <ErrorBoundary>

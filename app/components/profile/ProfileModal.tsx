@@ -116,6 +116,10 @@ export function ProfileModal({
   const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
   const [togglingGhost, setTogglingGhost] = useState(false);
   const [linkCopied,    setLinkCopied]    = useState(false);
+  const [mounted,       setMounted]       = useState(false);
+
+  // Ensure we are mounted (client-side) before reading window.location
+  useEffect(() => { setMounted(true); }, []);
 
   function lastSeenText(updatedAt: string | null | undefined): { text: string; online: boolean } {
     if (!updatedAt) return { text: '—', online: false };
@@ -155,10 +159,11 @@ export function ProfileModal({
   // Avatar: always derive from display_name words (first + last initial), then username
   const initials = deriveInitials(profile?.display_name ?? null, profile?.username ?? null);
 
-  // QR code pointing to real profile URL
-  const qrData = userId
-    ? `https://zmayy.com/u/${userId}`
-    : 'https://zmayy.com';
+  // QR code pointing to real profile URL — uses runtime origin so it works on any deployment
+  const profileUrl = mounted && userId
+    ? `${window.location.origin}/u/${userId}`
+    : null;
+  const qrData = profileUrl ?? (mounted ? window.location.origin : 'https://zmayy.com');
   const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrData)}&bgcolor=FFFFFF&color=0B0E11&margin=4`;
 
   // ── "Berbagi Lokasi" dynamic subtitle ─────────────────────────────────────
@@ -181,9 +186,10 @@ export function ProfileModal({
   }, [profile?.updated_at]);
 
   async function handleCopyLink() {
-    if (!userId) return;
+    if (!userId || !mounted) return;
+    const url = `${window.location.origin}/u/${userId}`;
     try {
-      await navigator.clipboard.writeText(`https://zmayy.com/u/${userId}`);
+      await navigator.clipboard.writeText(url);
       setLinkCopied(true);
       toast({ variant: 'success', title: 'Tautan disalin!', description: 'Tautan profil berhasil disalin ke clipboard.' });
       setTimeout(() => setLinkCopied(false), 2500);

@@ -5,13 +5,14 @@
  * ──────────────────────────────────────────────────────
  * • Toggle is_public terhubung langsung ke Supabase (instant update onChange)
  * • Tidak ada tombol Simpan/Batal — perubahan langsung tersimpan
- * • Hapus Akun diganti dengan instruksi kontak support (aman di client)
+ * • Hapus Akun: konfirmasi 2 langkah → supabase.rpc('delete_user_account')
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Mail } from 'lucide-react';
+import { X, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
 import { useToast } from '@/app/components/ui/Toast';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/utils/supabase/client';
 import type { Profile } from '@/utils/supabase/types';
 
@@ -71,9 +72,17 @@ export function PrivacySettingsModal({
 }: PrivacySettingsModalProps) {
   const supabase = createClient();
   const { toast } = useToast();
+  const router = useRouter();
 
   const [isPublic,      setIsPublic]      = useState(true);
   const [savingPublic,  setSavingPublic]  = useState(false);
+
+  // ── Delete account state ───────────────────────────────────────────────────
+  // Step 1: show warning; Step 2: require confirmation text
+  const [deleteStep,    setDeleteStep]    = useState<0 | 1 | 2>(0);
+  const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [deleting,      setDeleting]      = useState(false);
+  const confirmInputRef = useRef<HTMLInputElement>(null);
 
   // Sync initial state from profile prop whenever modal opens
   useEffect(() => {
@@ -81,6 +90,16 @@ export function PrivacySettingsModal({
       setIsPublic(profile.is_public ?? true);
     }
   }, [profile, isOpen]);
+
+  // Reset delete state when modal closes
+  useEffect(() => {
+    if (!isOpen) { setDeleteStep(0); setDeleteConfirm(''); }
+  }, [isOpen]);
+
+  // Focus confirm input when step 2 opens
+  useEffect(() => {
+    if (deleteStep === 2) setTimeout(() => confirmInputRef.current?.focus(), 80);
+  }, [deleteStep]);
 
   // ── Instant toggle handlers ────────────────────────────────────────────────
   async function handleTogglePublic(next: boolean) {
@@ -108,6 +127,24 @@ export function PrivacySettingsModal({
       });
     }
     setSavingPublic(false);
+  }
+
+  // ── Account deletion ───────────────────────────────────────────────────────
+  async function handleDeleteAccount() {
+    if (deleteConfirm !== 'HAPUS') return;
+    setDeleting(true);
+    try {
+      const { error } = await supabase.rpc('delete_user_account');
+      if (error) throw error;
+      // Success: sign out and redirect
+      await supabase.auth.signOut();
+      toast({ variant: 'success', title: 'Akun dihapus', description: 'Akunmu telah berhasil dihapus secara permanen.' });
+      router.replace('/login');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Gagal menghapus akun.';
+      toast({ variant: 'error', title: 'Gagal menghapus akun', description: msg });
+      setDeleting(false);
+    }
   }
 
   return (
@@ -172,31 +209,106 @@ export function PrivacySettingsModal({
                 Akun
               </p>
 
-              {/* Safe delete account — no client-side admin call */}
-              <div className="flex items-start gap-3 px-3 py-3 rounded-xl">
-                <div
-                  className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
-                  style={{ background: 'rgba(239,68,68,0.12)' }}
-                  aria-hidden="true"
-                >
-                  <Mail size={16} style={{ color: '#EF4444' }} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold" style={{ color: '#EF4444' }}>
-                    Hapus Akun
-                  </p>
-                  <p className="text-xs leading-relaxed mt-0.5" style={{ color: 'var(--color-muted)' }}>
-                    Untuk menghapus akun secara permanen, hubungi{' '}
-                    <a
-                      href="mailto:support@zmayy.com"
-                      className="underline"
-                      style={{ color: '#FCD535' }}
+              {/* ── Delete Account — multi-step confirmation ── */}
+              <AnimatePresence mode="wait">
+                {deleteStep === 0 && (
+                  <motion.div
+                    key="delete-idle"
+                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                    className="flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-red-500/5 cursor-pointer"
+                    onClick={() => setDeleteStep(1)}
+                  >
+                    <div
+                      className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+                      style={{ background: 'rgba(239,68,68,0.12)' }}
+                      aria-hidden="true"
                     >
-                      support@zmayy.com
-                    </a>
-                  </p>
-                </div>
-              </div>
+                      <Trash2 size={16} style={{ color: '#EF4444' }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold" style={{ color: '#EF4444' }}>Hapus Akun</p>
+                      <p className="text-xs" style={{ color: 'var(--color-muted)' }}>Hapus akun dan semua data secara permanen</p>
+                    </div>
+                  </motion.div>
+                )}
+
+                {deleteStep === 1 && (
+                  <motion.div
+                    key="delete-warn"
+                    initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+                    className="mx-1 px-4 py-4 rounded-xl space-y-3"
+                    style={{ background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.3)' }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle size={16} style={{ color: '#EF4444' }} />
+                      <p className="text-sm font-bold" style={{ color: '#EF4444' }}>Hapus Akun Secara Permanen?</p>
+                    </div>
+                    <p className="text-xs leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+                      Tindakan ini <span className="font-bold" style={{ color: '#EF4444' }}>tidak dapat dibatalkan</span>. Seluruh data — profil, teman, pesan, dan lokasi — akan dihapus selamanya.
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        id="delete-account-cancel-btn"
+                        onClick={() => setDeleteStep(0)}
+                        className="flex-1 py-2 rounded-lg text-xs font-semibold"
+                        style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--color-border)', color: 'var(--color-primary)' }}
+                      >
+                        Batal
+                      </button>
+                      <button
+                        id="delete-account-confirm-step1-btn"
+                        onClick={() => setDeleteStep(2)}
+                        className="flex-1 py-2 rounded-lg text-xs font-bold"
+                        style={{ background: 'rgba(239,68,68,0.85)', color: '#fff' }}
+                      >
+                        Lanjutkan
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+
+                {deleteStep === 2 && (
+                  <motion.div
+                    key="delete-confirm"
+                    initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+                    className="mx-1 px-4 py-4 rounded-xl space-y-3"
+                    style={{ background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.5)' }}
+                  >
+                    <p className="text-xs font-semibold" style={{ color: 'var(--color-muted)' }}>
+                      Ketik <span className="font-bold" style={{ color: '#EF4444' }}>HAPUS</span> untuk mengonfirmasi:
+                    </p>
+                    <input
+                      ref={confirmInputRef}
+                      id="delete-account-confirm-input"
+                      type="text"
+                      value={deleteConfirm}
+                      onChange={(e) => setDeleteConfirm(e.target.value)}
+                      placeholder="HAPUS"
+                      className="w-full px-3 py-2 rounded-lg text-sm font-mono"
+                      style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.4)', color: '#EF4444' }}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setDeleteStep(0); setDeleteConfirm(''); }}
+                        className="flex-1 py-2 rounded-lg text-xs font-semibold"
+                        style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--color-border)', color: 'var(--color-primary)' }}
+                      >
+                        Batal
+                      </button>
+                      <button
+                        id="delete-account-final-btn"
+                        onClick={handleDeleteAccount}
+                        disabled={deleteConfirm !== 'HAPUS' || deleting}
+                        className="flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-40"
+                        style={{ background: '#EF4444', color: '#fff' }}
+                      >
+                        {deleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                        {deleting ? 'Menghapus…' : 'Hapus Sekarang'}
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             {/* Footer — simple close */}

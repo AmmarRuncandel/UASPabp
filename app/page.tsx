@@ -78,7 +78,6 @@ function DashboardContent() {
     id: '', name: 'Friend', avatar: '?', distance: '—',
   });
   const [chatPendingCount, setChatPendingCount] = useState(0);
-  const [chatFriendsList, setChatFriendsList] = useState<ChatFriend[]>([]);
 
   // ── Resolve session ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -156,7 +155,7 @@ function DashboardContent() {
     setFocusedProfileId(null);
   }, []);
 
-  // Global incoming messages watcher (for chat badge)
+  // Global incoming messages watcher (for chat badge + conditional auto-open)
   useEffect(() => {
     if (!user) return;
 
@@ -168,7 +167,12 @@ function DashboardContent() {
         async (payload) => {
           setChatPendingCount((c) => c + 1);
 
-          // Try to open chat automatically and focus the sender if possible
+          // Respect notify_messages setting — if disabled, only bump badge silently.
+          // Default to true when the profile hasn't loaded yet.
+          const messagesEnabled = profile?.notify_messages ?? true;
+          if (!messagesEnabled) return;
+
+          // Auto-open chat to the sender (only if chat not already active)
           try {
             const senderId = payload.new.sender_id as string;
             const { data: p } = await supabase
@@ -179,20 +183,19 @@ function DashboardContent() {
 
             if (p) {
               const friend = profileToFriend(p as Profile);
-              // Only auto-open if chat not already open
               if (activePanel !== 'chat') {
                 openChat(friend);
               }
             }
-          } catch (err) {
-            // ignore
+          } catch {
+            // ignore — badge already incremented
           }
         }
       )
       .subscribe();
 
     return () => { ch.unsubscribe(); };
-  }, [supabase, user, openChat, activePanel]);
+  }, [supabase, user, openChat, activePanel, profile?.notify_messages]);
 
   // ── Fly-to-friend: fired by FriendsPanel / ChatPanel ──────────────────────
   const flyToFriend = useCallback((friendId: string) => {
@@ -278,6 +281,8 @@ function DashboardContent() {
             onStartChat={openChat}
             onFlyTo={flyToFriend}
             onPendingCountChange={setPendingCount}
+            initialSearchId={deepLinkFriendId}
+            onDeepLinkHandled={() => setDeepLinkFriendId(null)}
           />
         )}
 
@@ -288,6 +293,7 @@ function DashboardContent() {
             currentUserId={user.id}
             onClose={() => setActivePanel('none')}
             onOpenFriends={() => setActivePanel('friends')}
+            soundEnabled={profile?.notify_sound ?? true}
           />
         )}
 
