@@ -1,5 +1,5 @@
 /**
- * Service Worker — Zmayy PWA v3
+ * Service Worker — Zmayy PWA v4
  * ─────────────────────────────────────────────────────────────────
  * Strategies:
  *  • install      : precache app shell + self.skipWaiting()
@@ -15,13 +15,14 @@
  * Bump CACHE_VERSION on every production deploy to bust stale caches.
  */
 
-const CACHE_VERSION = 'zmayy-v3';
+const CACHE_VERSION = 'zmayy-v4';
 
 /** Minimal app shell — must all respond with 200 at install time */
 const SHELL_URLS = [
   '/',
   '/manifest.json',
-  '/images/zmay_logo.png',
+  '/pwa-192.png',
+  '/pwa-512.png',
 ];
 
 // ── Install ─────────────────────────────────────────────────────────────────
