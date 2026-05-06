@@ -16,7 +16,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MapPin, Navigation, ZoomIn, ZoomOut } from 'lucide-react';
+import { Navigation, ZoomIn, ZoomOut, Users, UserCheck, Circle } from 'lucide-react';
 import { createClient } from '@/utils/supabase/client';
 import type { VisibleUser } from '@/utils/supabase/types';
 
@@ -100,6 +100,13 @@ function makeFriendIcon(initials: string, delay: number, isFriend: boolean): L.D
     iconAnchor: [20, 20],
     popupAnchor: [0, -24],
   });
+}
+
+// isFriend helper — canonical source is relation_type, is_friend as fallback
+function resolveIsFriend(u: VisibleUser): boolean {
+  if (u.relation_type === 'friend') return true;
+  if (u.relation_type === 'stranger') return false;
+  return u.is_friend === true;
 }
 
 // ── Map controls inside MapContainer context ───────────────────────────────────
@@ -186,23 +193,24 @@ function MapControls({
         className="absolute bottom-28 left-6 z-[1000] flex flex-col gap-2"
         aria-live="polite"
       >
-        {/* Badge 1: Strangers ≤1km (is_friend === false) */}
+        {/* Badge 1: Strangers ≤1km (relation_type === 'stranger') */}
         <div
           className="glass flex items-center gap-2 px-3 py-2 rounded-xl"
           aria-label="Pengguna di sekitar"
         >
-          <MapPin size={13} style={{ color: '#9CA3AF' }} />
+          <Users size={13} style={{ color: '#9CA3AF', flexShrink: 0 }} />
           <span className="text-xs font-semibold" style={{ color: '#D1D5DB' }}>
             {isGhostMode ? '—' : strangerCount} pengguna di sekitar
           </span>
         </div>
-        {/* Badge 2: Online friends (is_friend === true) */}
+        {/* Badge 2: Online friends (relation_type === 'friend') */}
         <div
           className="glass flex items-center gap-2 px-3 py-2 rounded-xl"
           aria-label="Teman online"
         >
-          <MapPin size={13} style={{ color: 'var(--color-gold)' }} />
-          <span className="text-xs font-semibold" style={{ color: 'var(--color-primary)' }}>
+          <UserCheck size={13} style={{ color: '#FCD535', flexShrink: 0 }} />
+          <Circle size={7} style={{ color: '#22c55e', fill: '#22c55e', flexShrink: 0 }} />
+          <span className="text-xs font-semibold" style={{ color: '#FCD535' }}>
             {isGhostMode ? '—' : friendOnlineCount} teman online
           </span>
         </div>
@@ -341,8 +349,8 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
   visibleUsers.forEach((u, i) => {
     if (!friendIconMap.current.has(u.id)) {
       const initials = u.avatar_initials ?? (u.username?.slice(0, 2).toUpperCase() ?? '??');
-      // STRICT: rely on explicit is_friend flag from RPC payload
-      const isFriend = Boolean((u as any).is_friend === true || u.is_friend === true || u.relation_type === 'friend');
+      // Use canonical resolveIsFriend helper — relation_type is ground truth
+      const isFriend = resolveIsFriend(u);
       friendIconMap.current.set(u.id, makeFriendIcon(initials, (i % 4) * 0.55, isFriend));
     }
   });
@@ -406,8 +414,8 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
         <FlyToController target={flyTarget} />
         <MapControls
           isGhostMode={isGhostMode}
-          strangerCount={visibleUsers.filter((u) => u.relation_type === 'stranger').length}
-          friendOnlineCount={visibleUsers.filter((u) => u.relation_type === 'friend').length}
+          strangerCount={visibleUsers.filter((u) => !resolveIsFriend(u)).length}
+          friendOnlineCount={visibleUsers.filter((u) => resolveIsFriend(u)).length}
           userCenter={userPos}
         />
       </MapContainer>
