@@ -244,7 +244,7 @@ export function PrivacySettingsModal({
                       <p className="text-sm font-bold" style={{ color: '#EF4444' }}>Hapus Akun Secara Permanen?</p>
                     </div>
                     <p className="text-xs leading-relaxed" style={{ color: 'var(--color-muted)' }}>
-                      Tindakan ini <span className="font-bold" style={{ color: '#EF4444' }}>tidak dapat dibatalkan</span>. Seluruh data — profil, teman, pesan, dan lokasi — akan dihapus selamanya.
+                      Tindakan ini <span className="font-bold" style={{ color: '#EF4444' }}>tidak dapat dibatalkan</span>. Seluruh data profil, teman, pesan, dan lokasi akan dihapus selamanya.
                     </p>
                     <div className="flex gap-2">
                       <button

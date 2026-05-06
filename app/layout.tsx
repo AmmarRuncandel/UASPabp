@@ -15,7 +15,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Zmayy — Social Mapping & Real-Time Chat",
+  title: "Zmayy Social Mapping & Real-Time Chat",
   description:
     "Temukan teman di sekitarmu, bagikan lokasi, dan chat secara real-time dengan Zmayy social mapping.",
   manifest: "/manifest.json",
