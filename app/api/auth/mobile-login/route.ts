@@ -1,5 +1,13 @@
 import { NextRequest } from 'next/server';
-import { createAnonSupabaseClient, buildFallbackProfile, errorResponse, jsonResponse, normalizeProfile, optionsResponse } from '@/app/api/_lib/mobile-rest';
+import {
+  buildFallbackProfile,
+  createAnonSupabaseClient,
+  createAuthedSupabaseClient,
+  errorResponse,
+  jsonResponse,
+  normalizeProfile,
+  optionsResponse,
+} from '@/app/api/_lib/mobile-rest';
 
 type MobileLoginBody = {
   email?: string;
@@ -37,7 +45,21 @@ export async function POST(request: NextRequest) {
       return errorResponse(request, profileError.message, 500);
     }
 
-    const profile = profileRow ? normalizeProfile(profileRow) : buildFallbackProfile(data.user);
+    const fallbackProfile = buildFallbackProfile(data.user);
+    let profile = profileRow ? normalizeProfile(profileRow) : fallbackProfile;
+
+    if (!profileRow) {
+      const authedSupabase = createAuthedSupabaseClient(data.session.access_token);
+      const { data: createdProfile, error: createError } = await authedSupabase
+        .from('profiles')
+        .upsert(fallbackProfile, { onConflict: 'id' })
+        .select('*')
+        .single();
+
+      if (!createError && createdProfile) {
+        profile = normalizeProfile(createdProfile);
+      }
+    }
 
     return jsonResponse(request, {
       access_token: data.session.access_token,
