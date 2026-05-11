@@ -288,9 +288,29 @@ export function ProfileModal({
   // ── Logout ─────────────────────────────────────────────────────────────────
   async function handleLogout() {
     setLoggingOut(true);
-    await supabase.auth.signOut();
-    onLogout();
-    router.replace('/login');
+    try {
+      // 1. Sign out dari Supabase (clear JWT + cookies)
+      await supabase.auth.signOut();
+      
+      // 2. Clear local state
+      onLogout();
+      
+      // 3. Small delay untuk memastikan cookie sudah di-clear oleh browser
+      await new Promise(resolve => setTimeout(resolve, 150));
+      
+      // 4. Refresh server state (invalidate proxy cache + session)
+      router.refresh();
+      
+      // 5. Redirect ke login
+      router.replace('/login');
+    } catch (err) {
+      console.error('Logout error:', err);
+      // Force redirect even on error
+      router.replace('/login');
+      router.refresh();
+    } finally {
+      setLoggingOut(false);
+    }
   }
 
   return (

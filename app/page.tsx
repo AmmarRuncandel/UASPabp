@@ -134,9 +134,11 @@ function DashboardContent() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleLogout = useCallback(async () => {
-    await supabase.auth.signOut();
-    router.replace('/login');
-  }, [supabase, router]);
+    // Clear local state — actual signOut is handled by ProfileModal
+    setUser(null);
+    setProfile(null);
+    setActivePanel('none');
+  }, []);
 
   const togglePanel = useCallback((panel: ActivePanel) => {
     setActivePanel((prev) => (prev === panel ? 'none' : panel));

@@ -132,11 +132,21 @@ function LoginContent() {
         setPrevMode('signup');
         setMode('login');
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        // ─ Login: ensure fresh session & clear stale cache ─
+        const { error, data } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        
+        // Ensure session is properly established before redirect
+        if (data.session) {
+          // Small delay untuk memastikan cookie diset oleh Supabase
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        // Refresh server state untuk pick up sesi baru
+        router.refresh();
+        
         const next = searchParams?.get('next');
         router.push(next && next.startsWith('/') ? next : '/');
-        router.refresh();
       }
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : 'Autentikasi gagal.';
