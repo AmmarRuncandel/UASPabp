@@ -13,7 +13,6 @@ import {
 type MobileRegisterBody = {
   email?: string;
   password?: string;
-  username?: string;
 };
 
 function deriveAvatarInitials(name: string | null | undefined): string | null {
@@ -36,10 +35,17 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    // Defensive environment validation at handler entry to avoid hangs
+    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      return jsonResponse(request, { error: 'Env missing' }, 500);
+    }
+
     const body = (await request.json()) as MobileRegisterBody;
     const email = body.email?.trim() ?? '';
     const password = body.password ?? '';
-    const username = body.username?.trim() || email.split('@')[0] || '';
+    const username = email ? email.split('@')[0] : '';
 
     if (!email || !password) {
       return errorResponse(request, 'Email and password are required.', 400);
@@ -63,7 +69,7 @@ export async function POST(request: NextRequest) {
     const fallbackProfile = normalizeProfile({
       ...buildFallbackProfile(data.user),
       username,
-      display_name: username,
+      display_name: username || null,
       avatar_initials: deriveAvatarInitials(username),
     });
 

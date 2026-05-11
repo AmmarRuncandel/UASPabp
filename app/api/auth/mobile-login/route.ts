@@ -20,6 +20,13 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    // Defensive environment validation at handler entry to avoid hangs
+    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      return jsonResponse(request, { error: 'Env missing' }, 500);
+    }
+
     const body = (await request.json()) as MobileLoginBody;
     const email = body.email?.trim() ?? '';
     const password = body.password ?? '';
@@ -69,10 +76,6 @@ export async function POST(request: NextRequest) {
       profile,
     });
   } catch (error) {
-    return errorResponse(
-      request,
-      error instanceof Error ? error.message : 'Unable to authenticate mobile session.',
-      500
-    );
+    return errorResponse(request, error instanceof Error ? error.message : 'Unable to authenticate mobile session.', 500);
   }
 }
