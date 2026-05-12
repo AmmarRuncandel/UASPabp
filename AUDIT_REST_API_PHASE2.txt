@@ -1,0 +1,251 @@
+AUDIT PERUBAHAN REST API PHASE 2
+Project: UASPabp / Zmayy
+Tanggal: 2026-05-12
+Tujuan: Menjadi file audit yang bisa dibaca agent berikutnya untuk memahami perubahan Next.js, aturan REST API, dan penyesuaian yang perlu dilakukan pada logika login Flutter.
+
+======================================================================
+1) RINGKASAN EKSEKUTIF
+======================================================================
+
+Sudah dilakukan refactor arsitektur keamanan REST API Next.js dari pola lama berbasis autentikasi per-handler menjadi pola baru berbasis header internal x-user-id yang diinjeksikan oleh proxy.ts setelah verifikasi JWT.
+
+Hasil utama:
+- Verifikasi token dilakukan sekali di proxy.ts, bukan di setiap route handler.
+- Header x-user-id dari client dibersihkan agar tidak bisa dipalsukan.
+- Handler API sekarang membaca user context dari x-user-id, bukan decode JWT ulang.
+- Response error untuk API kini JSON 401, bukan redirect HTML.
+- CORS diperketat agar authenticated request tidak fallback ke wildcard.
+- Endpoint chat dan map sudah disesuaikan dengan pola baru.
+
+Dampak untuk Flutter:
+- Client harus mengirim Authorization: Bearer <token> pada request protected.
+- Flutter tidak boleh bergantung pada redirect HTML untuk API error.
+- Flutter harus menyimpan token login dan menggunakannya lagi pada semua endpoint protected.
+- mobile-session sekarang mengembalikan user_id, profile, session_valid; bukan access_token.
+
+======================================================================
+2) FILE YANG SUDAH DIUBAH / DIBANGUN
+======================================================================
+
+A. Infrastruktur keamanan Next.js
+- proxy.ts
+  - Menjadi dual-mode middleware untuk UI dan API.
+  - API protected route diverifikasi tokennya di level proxy.
+  - x-user-id diinjeksikan setelah token valid.
+  - Jika token hilang/invalid, API menerima JSON 401.
+
+- app/api/_lib/security.ts
+  - Menyediakan helper verifikasi token, sanitasi header, dan ekstraksi user context.
+  - Fungsi penting: extractBearerToken, verifyTokenAndGetUserId, sanitizeRequestHeaders, injectUserContextHeader, extractUserContextFromHeader.
+
+- app/api/_lib/mobile-rest.ts
+  - CORS diperketat.
+  - Tidak lagi fallback ke * untuk request authenticated.
+  - Menambah kredensial dan preflight cache.
+
+B. Endpoint yang sudah refactor ke pola baru
+- app/api/auth/mobile-session/route.ts
+- app/api/map/visible/route.ts
+- app/api/chat/send/route.ts
+- app/api/chat/history/route.ts
+
+C. Dokumen pendukung yang sudah ada
+- IMPLEMENTATION_PHASE_2.md
+- REFACTORING_EXAMPLES.md
+- PHASE_2_STATUS.md
+- QUICK_REFERENCE.md
+- ENDPOINT_MAP_VISIBLE.md
+- ENDPOINT_MAP_VISIBLE_SUMMARY.txt
+- PHASE_2_COMPLETE.txt
+
+======================================================================
+3) ATURAN BARU UNTUK REST API
+======================================================================
+
+Aturan autentikasi:
+- Endpoint protected wajib menerima Bearer token di Authorization header.
+- Token diverifikasi di proxy.ts.
+- Handler tidak boleh decode JWT lagi.
+- Handler hanya membaca x-user-id dari header internal.
+- Jika x-user-id tidak ada, handler harus balas 401 JSON.
+
+Aturan header:
+- Header x-user-* dari client harus dianggap tidak可信 dan dibersihkan.
+- Hanya proxy.ts yang boleh menulis x-user-id.
+- Handler harus menganggap x-user-id sebagai trusted internal context.
+
+Aturan response API:
+- API error harus JSON.
+- API protected tidak boleh redirect HTML.
+- 401 harus memakai Cache-Control: no-store.
+- Response sukses tetap lewat helper jsonResponse / errorResponse / optionsResponse.
+
+Aturan CORS:
+- Request authenticated tidak boleh default ke Access-Control-Allow-Origin: *.
+- Origin harus cocok dengan whitelist bila request membawa Authorization.
+- Credentials hanya boleh diaktifkan untuk origin yang diizinkan.
+- Preflight harus mendukung Authorization dan Content-Type.
+
+Aturan validasi input:
+- Query parameter dan body harus divalidasi di handler.
+- Data koordinat harus dibatasi pada range geografis yang benar.
+- String input seperti pesan chat harus punya batas panjang.
+- Missing/null/invalid input harus dibalas 400, bukan diteruskan ke database.
+
+Aturan akses database:
+- Query database harus memakai userId dari x-user-id.
+- Untuk route yang terkena RLS Supabase, handler juga harus meneruskan token JWT asli ke client Supabase berotentikasi.
+- Query harus tetap parameterized / lewat helper Supabase.
+- Handler harus log error dengan konteks userId untuk audit.
+
+======================================================================
+4) HASIL AUDIT PERUBAHAN NEXT.JS
+======================================================================
+
+A. proxy.ts
+- Sudah dipindah ke model dual-mode.
+- Route public seperti mobile-login dan mobile-register tetap bypass auth.
+- Route protected API diverifikasi dengan Bearer token.
+- x-user-id disuntikkan ke request internal.
+- Client spoofing terhadap x-user-id sudah ditutup dengan sanitasi header.
+- API failure sekarang JSON 401, bukan redirect.
+
+B. app/api/_lib/security.ts
+- Menjadi pusat aturan keamanan request.
+- Memisahkan logika token extraction, verifikasi, sanitasi, dan context injection.
+- Memudahkan handler agar fokus ke business logic.
+
+C. app/api/_lib/mobile-rest.ts
+- CORS lebih aman untuk Flutter mobile client.
+- Request authenticated tidak lagi bergantung pada wildcard origin.
+- Helper response tetap dipakai agar format API konsisten.
+
+D. app/api/auth/mobile-session/route.ts
+- Tidak lagi decode JWT di handler.
+- Mengambil userId dari x-user-id.
+- Mengembalikan session_valid dan profile.
+- Response sudah berubah dan perlu disesuaikan di Flutter.
+
+E. app/api/chat/send/route.ts
+- Mengambil userId dari header internal.
+- Mengambil token JWT asli dari Authorization header.
+- Memakai createAuthedSupabaseClient(token) agar RLS Supabase tidak memblokir insert.
+- Menambah validasi receiver_id dan content.
+- Menulis message dengan sender_id = userId dan receiver_id = receiverId.
+
+F. app/api/chat/history/route.ts
+- Mengambil userId dari header internal.
+- Mengambil token JWT asli dari Authorization header.
+- Memakai createAuthedSupabaseClient(token) agar RLS Supabase tidak memblokir query.
+- Query pesan dan profile berjalan lewat client yang terautentikasi.
+- is_mine dihitung dari sender_id === userId.
+
+G. app/api/map/visible/route.ts
+- Mengambil userId dari header internal.
+- Validasi koordinat diperketat.
+- Query RPC memakai caller_id = userId.
+- Ada filter jarak maksimal 1 km.
+
+======================================================================
+5) PENYESUAIAN YANG HARUS DILAKUKAN DI FLUTTER
+======================================================================
+
+Login flow:
+- Flutter harus tetap memakai response dari mobile-login untuk mendapatkan access_token.
+- Token itu wajib disimpan lokal agar bisa dipakai pada semua request protected berikutnya.
+- Jangan berharap mobile-session mengembalikan access_token lagi.
+
+Session flow:
+- mobile-session sekarang dipakai untuk validasi sesi dan pengambilan profile.
+- Response yang harus dibaca Flutter:
+  - user_id
+  - profile
+  - session_valid
+- Jika session_valid false atau request 401, Flutter harus mengarah ke login ulang.
+
+Protected API request flow:
+- Semua request ke chat, map, dan endpoint protected lain harus membawa:
+  - Authorization: Bearer <access_token>
+- Flutter tidak perlu menambahkan x-user-id.
+- Flutter tidak boleh mengandalkan HTML redirect untuk mendeteksi gagal auth.
+- Jika status 401, Flutter harus tangani sebagai session expired / invalid token.
+
+UI/UX login behavior yang perlu disesuaikan:
+- Bila API membalas 401 JSON, tampilkan state login ulang, bukan mencoba parse redirect.
+- Bila token masih ada tapi invalid, jalankan refresh/logout flow sesuai kebijakan aplikasi.
+- Bila response tidak punya access_token pada mobile-session, jangan treat itu sebagai error fatal; itu memang perilaku baru.
+
+CORS / network behavior:
+- Pastikan base URL Flutter mengarah ke origin yang memang diizinkan.
+- Pastikan request menggunakan header Authorization dan Content-Type yang konsisten.
+- Jika preflight gagal, cek whitelist origin di backend, bukan di Flutter saja.
+
+======================================================================
+6) IMPLIKASI LOGIKA LOGIN FLUTTER
+======================================================================
+
+Sebelum perubahan:
+- Flutter cenderung bisa bergantung pada response sesi untuk data auth penuh.
+- Error auth bisa tampil seperti redirect / halaman HTML.
+- Token decode atau state user bisa tersebar di beberapa layer.
+
+Sesudah perubahan:
+- Token login menjadi sumber utama untuk semua request protected.
+- Session endpoint hanya validasi + profile snapshot.
+- User context di backend diambil dari header internal, bukan decode ulang.
+- Error auth harus diperlakukan sebagai JSON API error.
+
+Checklist Flutter yang perlu disesuaikan:
+- Simpan access_token setelah login.
+- Pakai access_token itu pada header Authorization semua request protected.
+- Parse response mobile-session sebagai session check, bukan source token.
+- Tangani 401 dengan logout / re-auth flow.
+- Hindari asumsi bahwa API akan redirect ke login page.
+- Pastikan model parsing mengikuti response baru { user_id, profile, session_valid }.
+
+======================================================================
+7) ATURAN TEKNIS UNTUK AGENT BERIKUTNYA
+======================================================================
+
+Jika agent berikutnya ingin mengubah endpoint baru, ikuti aturan ini:
+- Jangan decode JWT di handler.
+- Jangan baca x-user-id dari client sebagai trusted value.
+- Selalu pakai extractUserContextFromHeader di handler protected.
+- Untuk endpoint yang kena RLS, selalu pakai createAuthedSupabaseClient(token) atau client Supabase dengan Authorization bearer token.
+- Selalu validasi input sebelum query database.
+- Selalu log error dengan userId bila tersedia.
+- Selalu kembalikan JSON untuk API.
+
+Template perubahan endpoint protected:
+1. Ambil userId dari x-user-id.
+2. Validasi userId tidak null.
+3. Validasi input body/query.
+4. Buat Supabase client.
+5. Query database dengan userId.
+6. Return JSON response.
+7. Log error secara eksplisit.
+
+======================================================================
+8) STATUS AKHIR AUDIT
+======================================================================
+
+Status implementasi Next.js:
+- proxy.ts: selesai
+- security.ts: selesai
+- mobile-rest.ts: selesai
+- mobile-session: selesai
+- chat/send: selesai
+- chat/history: selesai
+- map/visible: selesai
+
+Status yang perlu dipastikan di Flutter:
+- login tetap menyimpan access_token
+- protected request selalu mengirim Authorization
+- session endpoint dibaca sebagai session validation, bukan token issuance
+- 401 JSON ditangani sebagai logout / re-auth
+
+Kesimpulan:
+- Backend Next.js sekarang lebih aman, lebih konsisten, dan lebih mudah diintegrasikan ke Flutter.
+- Penyesuaian utama di Flutter ada pada penyimpanan token, penggunaan header Authorization, dan cara menangani response session/auth.
+
+END OF AUDIT

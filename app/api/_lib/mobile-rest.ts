@@ -20,23 +20,56 @@ function assertSupabaseEnvironment() {
   }
 }
 
-function getAllowedOrigin(request: NextRequest): string {
+function getAllowedOrigin(request: NextRequest): string | null {
   const origin = request.headers.get('origin');
 
   if (!origin) {
-    return '*';
+    return null; // No origin header = likely same-origin or non-browser request
   }
 
-  return ALLOWED_ORIGINS.has(origin) ? origin : '*';
+  return ALLOWED_ORIGINS.has(origin) ? origin : null;
 }
 
 export function buildCorsHeaders(request: NextRequest): Headers {
   const headers = new Headers();
-  headers.set('Access-Control-Allow-Origin', getAllowedOrigin(request));
-  headers.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  const allowedOrigin = getAllowedOrigin(request);
+  const isAuthenticated = request.headers.has('authorization');
+
+  /**
+   * SECURITY: For authenticated requests (API with Bearer token):
+   *  - Only set specific origin if whitelisted
+   *  - Never fallback to * for authenticated requests
+   *  - Set Credentials: true to allow cookies/auth headers in CORS
+   */
+  if (isAuthenticated) {
+    if (allowedOrigin) {
+      headers.set('Access-Control-Allow-Origin', allowedOrigin);
+      headers.set('Access-Control-Allow-Credentials', 'true');
+    } else if (origin) {
+      // Authenticated request from non-whitelisted origin = reject CORS
+      // Browser will block the request anyway, but be explicit
+      headers.set('Access-Control-Allow-Origin', 'null');
+    }
+    // If no origin header, don't set CORS headers (likely server-to-server)
+  } else {
+    /**
+     * Unauthenticated requests (public endpoints):
+     *  - Can use * wildcard for public data endpoints
+     *  - Never set Credentials header for public endpoints
+     */
+    if (allowedOrigin) {
+      headers.set('Access-Control-Allow-Origin', allowedOrigin);
+    } else {
+      headers.set('Access-Control-Allow-Origin', '*');
+    }
+  }
+
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   headers.set('Access-Control-Expose-Headers', 'Content-Type');
-  headers.set('Vary', 'Origin');
+  headers.set('Access-Control-Max-Age', '3600'); // Cache preflight for 1 hour
+  headers.set('Vary', 'Origin, Authorization');
+
   return headers;
 }
 
@@ -134,10 +167,11 @@ export function normalizeProfile(profile: Partial<Profile> & Pick<Profile, 'id'>
   };
 }
 
-export function buildFallbackProfile(user: User): Profile {
+export function buildFallbackProfile(user: User | { id: string; email?: string | null }): Profile {
+  const email = (user as any).email;
   return normalizeProfile({
     id: user.id,
-    username: user.email?.split('@')[0] ?? null,
+    username: email?.split('@')[0] ?? null,
     display_name: null,
     avatar_initials: null,
     last_lat: null,
@@ -152,6 +186,36 @@ export function buildFallbackProfile(user: User): Profile {
     notify_sound: true,
   });
 }
+
+/**
+ * Create a Supabase client with the given user ID's authorization context
+ * Useful for protected routes where user ID comes from x-user-id header
+ *
+ * NOTE: This requires either:
+ *  - The access token for the user (server-side session)
+ *  - Or direct database access with RLS policies that check auth.uid()
+ *
+ * For now, returns anon client and relies on Supabase RLS for row-level security
+ */
+export function createSupabaseClientForUserId(userId: string): SupabaseClient {
+  assertSupabaseEnvironment();
+
+  // ⚠️ IMPORTANT: This returns anon client.
+  // Actual data access control is enforced by Supabase RLS policies.
+  // The userId is used for query filtering (e.g., .eq('id', userId))
+  return createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!);
+}
+
+/**
+ * Type definition for authenticate result (backward compatibility)
+ */
+export type AuthenticateResult =
+  | { user: User; token: string; supabase: SupabaseClient }
+  | { response: NextResponse<{ error: string }> };
+  
+export type AuthenticateResultSuccess = Extract<AuthenticateResult, { user: User }>;
+export type AuthenticateResultError = Extract<AuthenticateResult, { response: NextResponse }>;
+
 
 export function resolveIsFriend(row: Pick<VisibleUser, 'relation_type' | 'is_friend'>): boolean {
   if (row.relation_type === 'friend') {

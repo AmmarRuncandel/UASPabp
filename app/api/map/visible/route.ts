@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
 
 import {
-  authenticateMobileRequest,
   calculateDistanceKm,
+  createAnonSupabaseClient,
   errorResponse,
   getLastSeenState,
   jsonResponse,
@@ -10,6 +10,7 @@ import {
   resolveIsFriend,
   toNumberOrNull,
 } from '@/app/api/_lib/mobile-rest';
+import { extractUserContextFromHeader } from '@/app/api/_lib/security';
 import type { VisibleUser } from '@/utils/supabase/types';
 
 type VisibleUserResponse = {
@@ -33,44 +34,90 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await authenticateMobileRequest(request);
-    if ('response' in auth) {
-      return auth.response;
+    // ────────────────────────────────────────────────────────────────────────────
+    // STEP 1: Extract & validate user context from header (verified by proxy.ts)
+    // ────────────────────────────────────────────────────────────────────────────
+    const userId = extractUserContextFromHeader(request);
+    if (!userId) {
+      return errorResponse(request, 'Unauthorized: Missing user context', 401);
     }
 
+    // ────────────────────────────────────────────────────────────────────────────
+    // STEP 2: Extract & validate coordinate query parameters
+    // ────────────────────────────────────────────────────────────────────────────
     const latParam = request.nextUrl.searchParams.get('lat');
     const lngParam = request.nextUrl.searchParams.get('lng');
+
+    // Convert to numbers and validate
     const lat = toNumberOrNull(latParam);
     const lng = toNumberOrNull(lngParam);
 
     if (lat === null || lng === null) {
-      return errorResponse(request, 'Query parameters lat and lng are required.', 400);
+      return errorResponse(
+        request,
+        'Query parameters lat and lng are required and must be valid numbers.',
+        400
+      );
     }
 
-    const { data, error } = await auth.supabase.rpc('get_visible_users', {
-      caller_id: auth.user.id,
+    // ✓ IMPROVEMENT: Validate geographic coordinate bounds
+    if (lat < -90 || lat > 90) {
+      return errorResponse(
+        request,
+        'Latitude must be between -90 and 90.',
+        400
+      );
+    }
+
+    if (lng < -180 || lng > 180) {
+      return errorResponse(
+        request,
+        'Longitude must be between -180 and 180.',
+        400
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // STEP 3: Create Supabase client and call RPC function
+    // ────────────────────────────────────────────────────────────────────────────
+    const supabase = createAnonSupabaseClient();
+
+    const { data, error } = await supabase.rpc('get_nearby_users', {
+      caller_id: userId,
       user_lat: lat,
       user_lng: lng,
     });
 
     if (error) {
+      console.error(
+        `[map/visible] RPC error for user ${userId} at (${lat}, ${lng}):`,
+        error
+      );
       return errorResponse(request, error.message, 500);
     }
 
+    // ────────────────────────────────────────────────────────────────────────────
+    // STEP 4: Transform RPC results into response format
+    // ────────────────────────────────────────────────────────────────────────────
     const visibleUsers = ((data ?? []) as VisibleUser[])
       .map((row) => {
         const rowLat = toNumberOrNull(row.last_lat);
         const rowLng = toNumberOrNull(row.last_lng);
 
+        // Skip users without valid coordinates
         if (rowLat === null || rowLng === null) {
           return null;
         }
 
+        // Calculate distance from current position
         const distanceKm = calculateDistanceKm(lat, lng, rowLat, rowLng);
+
+        // ✓ FILTER: Only include users within 1km (safety & performance)
         if (distanceKm > 1) {
           return null;
         }
 
+        // Get online status from last_updated timestamp
         const lastSeen = getLastSeenState(row.updated_at);
 
         return {
@@ -90,8 +137,16 @@ export async function GET(request: NextRequest) {
       })
       .filter((row): row is VisibleUserResponse => row !== null);
 
+    // ────────────────────────────────────────────────────────────────────────────
+    // STEP 5: Return response with CORS headers
+    // ────────────────────────────────────────────────────────────────────────────
+    console.info(
+      `[map/visible] Returned ${visibleUsers.length} visible users for user ${userId} at (${lat}, ${lng})`
+    );
+
     return jsonResponse(request, visibleUsers);
   } catch (error) {
+    console.error('[map/visible] Unexpected error:', error);
     return errorResponse(
       request,
       error instanceof Error ? error.message : 'Unable to load visible users.',

@@ -5,7 +5,7 @@
  * ─────────────────────────────────────────────────────────
  * • CartoDB Dark Matter tiles (no API key)
  * • navigator.geolocation.watchPosition → upserts profiles.last_lat/lng
- * • Fetches visible users via get_visible_users() RPC (friends + strangers ≤1 km)
+ * • Fetches visible users via get_nearby_users() RPC (friends + strangers ≤1 km)
  * • Ghost Mode activation explicitly nulls last_lat/last_lng in the DB
  * • Custom gold SVG teardrop for current user
  * • Zoom / recenter controls via useMap()
@@ -310,14 +310,14 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
     const lat = currentLat ?? DEFAULT_CENTER[0];
     const lng = currentLng ?? DEFAULT_CENTER[1];
 
-    const { data, error } = await supabase.rpc('get_visible_users', {
+    const { data, error } = await supabase.rpc('get_nearby_users', {
       caller_id: userId,
       user_lat:  lat,
       user_lng:  lng,
     });
 
     if (error) {
-      console.warn('[Map] RPC get_visible_users error:', error.message);
+      console.warn('[Map] RPC get_nearby_users error:', error.message);
       return;
     }
 

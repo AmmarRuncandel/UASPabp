@@ -42,7 +42,7 @@ export interface Message {
 }
 
 /**
- * Row returned by the get_visible_users(caller_id, user_lat, user_lng) RPC.
+ * Row returned by the get_nearby_users(caller_id, user_lat, user_lng) RPC.
  * The function returns friends (any distance) + public strangers within 1 km.
  */
 export interface VisibleUser {

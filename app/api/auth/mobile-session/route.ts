@@ -1,55 +1,77 @@
 import { NextRequest } from 'next/server';
 
 import {
-  authenticateMobileRequest,
   buildFallbackProfile,
+  createAnonSupabaseClient,
   errorResponse,
   jsonResponse,
   normalizeProfile,
   optionsResponse,
 } from '@/app/api/_lib/mobile-rest';
+import { extractUserContextFromHeader } from '@/app/api/_lib/security';
 
 export async function OPTIONS(request: NextRequest) {
   return optionsResponse(request);
 }
 
+/**
+ * GET /api/auth/mobile-session
+ * ─────────────────────────────────────────────────────────────────────────
+ * Validate mobile session and return current user profile.
+ *
+ * SECURITY NOTES:
+ *  - User ID extracted from x-user-id header (set by proxy.ts after JWT verification)
+ *  - No token decoding needed in handler — proxy already validated
+ *  - Request headers have been sanitized to prevent spoofing attacks
+ *
+ * Response:
+ *  - 200: { user_id, profile, session_valid }
+ *  - 401: { error: "..." } (from proxy.ts or missing header)
+ *  - 500: { error: "..." } (database error)
+ */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await authenticateMobileRequest(request);
-    if ('response' in auth) {
-      return auth.response;
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 1: Extract user context from header set by proxy.ts
+    // ────────────────────────────────────────────────────────────────────────
+    const userId = extractUserContextFromHeader(request);
+    if (!userId) {
+      return errorResponse(request, 'Unauthorized: Missing user context', 401);
     }
 
-    const { data: profileRow, error: profileError } = await auth.supabase
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 2: Fetch current user profile from database
+    // ────────────────────────────────────────────────────────────────────────
+    const anonClient = createAnonSupabaseClient();
+
+    const { data: profileRow, error: profileError } = await anonClient
       .from('profiles')
       .select('*')
-      .eq('id', auth.user.id)
+      .eq('id', userId)
       .maybeSingle();
 
     if (profileError) {
-      return errorResponse(request, profileError.message, 500);
+      console.error(`[mobile-session] Profile query error for user ${userId}:`, profileError);
+      return errorResponse(request, 'Failed to fetch profile', 500);
     }
 
-    let profile = profileRow ? normalizeProfile(profileRow) : buildFallbackProfile(auth.user);
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 3: Create fallback profile if not found
+    // ────────────────────────────────────────────────────────────────────────
+    let profile = profileRow
+      ? normalizeProfile(profileRow)
+      : buildFallbackProfile({ id: userId, email: null });
 
-    if (!profileRow) {
-      const { data: createdProfile, error: createError } = await auth.supabase
-        .from('profiles')
-        .upsert(profile, { onConflict: 'id' })
-        .select('*')
-        .single();
-
-      if (!createError && createdProfile) {
-        profile = normalizeProfile(createdProfile);
-      }
-    }
-
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 4: Return session with current profile
+    // ────────────────────────────────────────────────────────────────────────
     return jsonResponse(request, {
-      access_token: auth.token,
-      user: auth.user,
+      user_id: userId,
       profile,
+      session_valid: true,
     });
   } catch (error) {
+    console.error('[mobile-session] Unexpected error:', error);
     return errorResponse(
       request,
       error instanceof Error ? error.message : 'Unable to validate mobile session.',
