@@ -78,13 +78,13 @@ export async function PATCH(request: NextRequest) {
     const updatePayload: Partial<UpdateProfileBody> = {};
 
     if (body.username !== undefined) {
-      updatePayload.username = body.username.trim() || null;
+      updatePayload.username = body.username ? body.username.trim() || null : null;
     }
     if (body.display_name !== undefined) {
-      updatePayload.display_name = body.display_name.trim() || null;
+      updatePayload.display_name = body.display_name ? body.display_name.trim() || null : null;
     }
     if (body.avatar_initials !== undefined) {
-      updatePayload.avatar_initials = body.avatar_initials.trim() || null;
+      updatePayload.avatar_initials = body.avatar_initials ? body.avatar_initials.trim() || null : null;
     }
     if (body.is_ghost_mode !== undefined) {
       updatePayload.is_ghost_mode = Boolean(body.is_ghost_mode);
