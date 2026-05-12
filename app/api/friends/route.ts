@@ -85,17 +85,18 @@ export async function GET(request: NextRequest) {
       return errorResponse(request, error.message, 500);
     }
 
-    const friends = ((data ?? []) as FriendshipRow[])
+    const friends = ((data ?? []) as unknown as FriendshipRow[])
       .map((row) => {
         const profile = row.requester_id === userId ? row.addressee : row.requester;
+        const profileData = Array.isArray(profile) ? profile[0] : profile;
 
-        if (!profile) {
+        if (!profileData) {
           return null;
         }
 
-        return normalizeProfile(profile);
+        return normalizeProfile(profileData);
       })
-      .filter((profile): profile is Profile => profile !== null);
+      .filter((profile): profile is Profile => profile !== null && profile !== undefined);
 
     const uniqueFriends = Array.from(new Map(friends.map((profile) => [profile.id, profile])).values());
 
