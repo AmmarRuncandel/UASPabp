@@ -71,6 +71,13 @@ export async function POST(request: NextRequest) {
       username,
       display_name: username || null,
       avatar_initials: deriveAvatarInitials(username),
+      is_ghost_mode: false,
+      is_public: true,
+      notifications_enabled: true,
+      notify_global: true,
+      notify_requests: true,
+      notify_messages: true,
+      notify_sound: true,
     });
 
     if (!data.session?.access_token) {

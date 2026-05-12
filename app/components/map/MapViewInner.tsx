@@ -102,11 +102,8 @@ function makeFriendIcon(initials: string, delay: number, isFriend: boolean): L.D
   });
 }
 
-// isFriend helper — canonical source is relation_type, is_friend as fallback
 function resolveIsFriend(u: VisibleUser): boolean {
-  if (u.relation_type === 'friend') return true;
-  if (u.relation_type === 'stranger') return false;
-  return u.is_friend === true;
+  return u.relation_type === 'friend' || u.is_friend === true;
 }
 
 // ── Map controls inside MapContainer context ───────────────────────────────────
@@ -267,57 +264,109 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
 
     // Transition: non-ghost → ghost → erase footprint
     if (!wasGhost && isGhostMode) {
+      console.log('[Map] Ghost mode activated, wiping location from DB');
       supabase
         .from('profiles')
         .update({ last_lat: null, last_lng: null })
         .eq('id', userId)
         .then(({ error }) => {
-          if (error) console.warn('[Map] Failed to wipe ghost coordinates:', error.message);
-          else console.log('[Map] Ghost Mode: coordinates wiped from DB');
+          if (error) {
+            console.error('[Map] Failed to wipe ghost coordinates:', error.message);
+          } else {
+            console.log('[Map] Ghost Mode: coordinates wiped from DB');
+          }
         });
+    } else if (wasGhost && !isGhostMode) {
+      console.log('[Map] Ghost mode deactivated, location tracking will resume');
     }
   }, [isGhostMode, userId, supabase]);
 
   // ── Geolocation watchPosition ──────────────────────────────────────────────
   useEffect(() => {
     // Skip geolocation tracking if ghost mode is enabled
-    if (isGhostMode || !('geolocation' in navigator)) return;
+    if (isGhostMode) {
+      console.log('[Map] Ghost mode enabled, skipping geolocation');
+      return;
+    }
+    
+    if (!('geolocation' in navigator)) {
+      console.warn('[Map] Geolocation not supported');
+      return;
+    }
+
+    console.log('[Map] Starting geolocation watch');
 
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
+        console.log(`[Map] Location updated: (${lat}, ${lng})`);
+        
         setUserPos([lat, lng]);
         setCurrentLat(lat);
         setCurrentLng(lng);
 
         // Update profiles — non-blocking, best-effort. Only update existing profile row.
-        await supabase
+        const { error } = await supabase
           .from('profiles')
           .update({ last_lat: lat, last_lng: lng, updated_at: new Date().toISOString() })
           .eq('id', userId);
+        
+        if (error) {
+          console.error('[Map] Failed to update location in DB:', error.message);
+        } else {
+          console.log('[Map] Location saved to database');
+        }
       },
-      () => {/* permission denied or unavailable — keep DEFAULT_CENTER */},
+      (error) => {
+        console.error('[Map] Geolocation error:', error.message);
+      },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
 
-    return () => navigator.geolocation.clearWatch(watchId);
+    return () => {
+      console.log('[Map] Stopping geolocation watch');
+      navigator.geolocation.clearWatch(watchId);
+    };
   }, [userId, supabase, isGhostMode]);
 
   // ── Fetch visible users via spatial RPC ────────────────────────────────────
   const fetchVisibleUsers = useCallback(async () => {
+    // Skip if ghost mode is enabled
+    if (isGhostMode) {
+      console.log('[Map] Ghost mode enabled, skipping fetch');
+      setVisibleUsers([]);
+      return;
+    }
+
     // Need at least a rough location to call the RPC
     const lat = currentLat ?? DEFAULT_CENTER[0];
     const lng = currentLng ?? DEFAULT_CENTER[1];
 
-    const { data, error } = await supabase.rpc('get_nearby_users', {
+    console.log(`[Map] Fetching visible users at (${lat}, ${lng})`);
+
+    // Try primary RPC function
+    let { data, error } = await supabase.rpc('get_nearby_users', {
       caller_id: userId,
       user_lat:  lat,
       user_lng:  lng,
     });
 
+    // If function not found, try alternative name
+    if (error && error.message?.includes('function') && error.message?.includes('does not exist')) {
+      console.warn('[Map] get_nearby_users not found, trying get_visible_users');
+      const fallback = await supabase.rpc('get_visible_users', {
+        caller_id: userId,
+        user_lat:  lat,
+        user_lng:  lng,
+      });
+      data = fallback.data;
+      error = fallback.error;
+    }
+
     if (error) {
-      console.warn('[Map] RPC get_nearby_users error:', error.message);
+      console.error('[Map] RPC error:', error.message);
+      console.error('[Map] Error details:', error);
       return;
     }
 
@@ -326,9 +375,13 @@ export function MapViewInner({ isGhostMode, userId, focusProfileId }: MapViewInn
       const users = (data as VisibleUser[]).filter(
         (u) => u.last_lat !== null && u.last_lng !== null
       );
+      console.log(`[Map] Loaded ${users.length} visible users`);
       setVisibleUsers(users);
+    } else {
+      console.log('[Map] No data returned from RPC');
+      setVisibleUsers([]);
     }
-  }, [supabase, userId, currentLat, currentLng]);
+  }, [supabase, userId, currentLat, currentLng, isGhostMode]);
 
   useEffect(() => {
     fetchVisibleUsers();

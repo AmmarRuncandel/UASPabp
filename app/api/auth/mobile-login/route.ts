@@ -59,7 +59,21 @@ export async function POST(request: NextRequest) {
       const authedSupabase = createAuthedSupabaseClient(data.session.access_token);
       const { data: createdProfile, error: createError } = await authedSupabase
         .from('profiles')
-        .upsert(fallbackProfile, { onConflict: 'id' })
+        .upsert({
+          id: fallbackProfile.id,
+          username: fallbackProfile.username,
+          display_name: fallbackProfile.display_name,
+          avatar_initials: fallbackProfile.avatar_initials,
+          last_lat: null,
+          last_lng: null,
+          is_ghost_mode: false,
+          is_public: true,
+          notifications_enabled: true,
+          notify_global: true,
+          notify_requests: true,
+          notify_messages: true,
+          notify_sound: true,
+        }, { onConflict: 'id' })
         .select('*')
         .single();
 

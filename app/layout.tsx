@@ -8,6 +8,11 @@ import { ServiceWorkerRegister } from '@/app/components/ui/ServiceWorkerRegister
 import { ErrorBoundary } from '@/app/components/ui/ErrorBoundary';
 import { ChatNotificationsProvider } from '@/app/context/ChatNotifications';
 
+// Import debug tools (only in development)
+if (process.env.NODE_ENV === 'development') {
+  import('@/app/utils/debug');
+}
+
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-sans",

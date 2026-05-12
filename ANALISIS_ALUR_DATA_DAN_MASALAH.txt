@@ -1,0 +1,771 @@
+================================================================================
+ANALISIS KOMPREHENSIF ALUR DATA DAN MASALAH ZMAYY MOBILE
+================================================================================
+Tanggal Audit: 12 Mei 2026
+Auditor: Kiro AI Assistant
+Tujuan: Menganalisis alur verifikasi data Flutter → Next.js → Supabase
+        dan mengidentifikasi akar masalah fitur yang tidak berfungsi
+
+================================================================================
+BAGIAN 1: RINGKASAN EKSEKUTIF
+================================================================================
+
+MASALAH YANG DILAPORKAN:
+------------------------
+✅ Login berhasil
+❌ Peta tidak menampilkan lokasi (padahal izin lokasi sudah diberikan)
+❌ Teman tidak muncul di peta
+❌ Request pertemanan tidak muncul
+❌ Pesan tidak muncul (padahal akun sudah pernah tukar pesan)
+❌ Settings tidak menampilkan data yang sudah diatur di web (contoh: alias name)
+
+DIAGNOSIS AWAL:
+--------------
+Masalah utama bukan di autentikasi (login berhasil), tetapi di:
+1. Sinkronisasi data antara web dan mobile
+2. Fetching data setelah login
+3. State management yang tidak memuat data dari backend
+4. Kemungkinan RLS (Row Level Security) Supabase memblokir akses data
+
+================================================================================
+BAGIAN 2: ARSITEKTUR SISTEM SAAT INI
+================================================================================
+
+2.1 ALUR DATA LENGKAP
+----------------------
+
+[FLUTTER MOBILE] → [NEXT.JS REST API] → [SUPABASE DATABASE]
+     ↓                    ↓                      ↓
+  ApiClient          proxy.ts              RLS Policies
+  Repository      security.ts            Tables: profiles,
+  AppState        Route Handlers          messages, friends,
+                                          friend_requests
+
+DETAIL ALUR:
+-----------
+1. Flutter mengirim request dengan Authorization: Bearer <token>
+2. Next.js proxy.ts memverifikasi token JWT
+3. proxy.ts inject x-user-id ke header internal
+4. Route handler membaca x-user-id (bukan decode JWT lagi)
+5. Route handler membuat Supabase client dengan token
+6. Supabase RLS memverifikasi akses berdasarkan auth.uid()
+7. Data dikembalikan ke Flutter sebagai JSON
+8. Flutter menyimpan di AppState dan menampilkan di UI
+
+2.2 ENDPOINT YANG TERSEDIA
+---------------------------
+
+AUTENTIKASI:
+- POST /api/auth/mobile-login
+- POST /api/auth/mobile-register
+- GET  /api/auth/mobile-session (validasi session)
+- PATCH /api/auth/profile (update profile)
+
+PETA:
+- GET  /api/map/visible?lat=X&lng=Y (ambil user terdekat)
+- POST /api/map/enable (aktifkan sharing lokasi)
+
+CHAT:
+- GET  /api/chat/history (global chat history)
+- POST /api/chat/send (kirim pesan global)
+- GET  /api/chat/dm/history?friend_id=X (DM history)
+- POST /api/chat/dm/send (kirim DM)
+
+TEMAN: (BELUM DITEMUKAN DI KODE)
+- Endpoint untuk friend requests TIDAK DITEMUKAN
+- Endpoint untuk accept/reject friend TIDAK DITEMUKAN
+- Endpoint untuk list friends TIDAK DITEMUKAN
+
+2.3 STRUKTUR DATABASE SUPABASE
+-------------------------------
+
+Berdasarkan dokumentasi, tabel yang ada:
+- profiles (id, username, alias, last_lat, last_lng, is_ghost_mode, 
+            is_public, notify_sound, notify_global, notify_requests, 
+            notify_messages, updated_at)
+- messages (id, sender_id, receiver_id, content, created_at)
+- friends (kemungkinan ada, tapi tidak terlihat di kode)
+- friend_requests (kemungkinan ada, tapi tidak terlihat di kode)
+
+RPC Functions:
+- get_visible_users(caller_id, user_lat, user_lng)
+  → Mengembalikan friends (any distance) + public strangers (≤1km)
+
+================================================================================
+BAGIAN 3: ANALISIS KODE FLUTTER
+================================================================================
+
+3.1 FLOW LOGIN DAN SESSION
+---------------------------
+
+FILE: lib/features/auth/login_screen.dart
+PROSES:
+1. User input email + password
+2. AuthRepository.login() dipanggil
+3. POST /api/auth/mobile-login
+4. Response: { access_token, user, profile }
+5. Token disimpan di SecureStorage
+6. Navigate ke AppShell
+
+FILE: lib/app_shell.dart
+PROSES SETELAH LOGIN:
+1. AppShell.initState() dipanggil
+2. addPostFrameCallback:
+   - state.loadProfileFromStorage() ← HANYA BACA DARI LOCAL STORAGE
+   - state.loadChatHistory() ← FETCH DARI API
+
+⚠️ MASALAH #1: PROFILE TIDAK DI-REFRESH DARI SERVER
+----------------------------------------------------
+loadProfileFromStorage() HANYA membaca dari SecureStorage lokal.
+Jika user mengubah alias di web, perubahan tidak akan terlihat di mobile
+karena mobile tidak pernah fetch profile terbaru dari server.
+
+SOLUSI: Tambahkan fetch profile dari /api/auth/mobile-session setelah login
+
+3.2 FLOW PETA (MAP)
+-------------------
+
+FILE: lib/features/map/map_screen.dart
+PROSES:
+1. initState() → _initLocation()
+2. Request permission lokasi
+3. Geolocator.getCurrentPosition()
+4. appState.fetchNearbyUsers(lat, lng)
+5. mapRepo.enableMap(lat, lng)
+
+FILE: lib/data/repositories/map_repository.dart
+ENDPOINT: GET /api/map/visible?lat=X&lng=Y
+
+FILE: lib/core/app_state.dart
+METHOD: fetchNearbyUsers()
+LOGIKA:
+- Cek ghost mode → jika aktif, skip
+- Call mapRepository.getVisibleUsers()
+- Update _visibleUsers list
+- notifyListeners()
+
+⚠️ MASALAH #2: GHOST MODE BISA MEMBLOKIR PETA
+----------------------------------------------
+Jika profile.isGhostMode == true, fetchNearbyUsers() akan return early
+dan tidak fetch data apapun.
+
+KEMUNGKINAN: User pernah aktifkan ghost mode di web, dan flag tersebut
+masih true di database, sehingga mobile tidak pernah fetch user terdekat.
+
+SOLUSI: Pastikan ghost mode false, atau tambah UI toggle di mobile
+
+⚠️ MASALAH #3: ERROR HANDLING TIDAK TERLIHAT
+---------------------------------------------
+Jika API error (403, 500, timeout), error disimpan di mapError tapi
+tidak ditampilkan di UI. User hanya melihat peta kosong tanpa tahu
+ada error.
+
+SOLUSI: Tampilkan mapError di UI dengan SnackBar atau overlay
+
+3.3 FLOW CHAT
+-------------
+
+FILE: lib/features/chat/chat_screen.dart (global chat)
+FILE: lib/features/chat/chat_detail_screen.dart (DM)
+
+PROSES GLOBAL CHAT:
+1. AppShell → loadChatHistory()
+2. GET /api/chat/history
+3. Response: array of messages (max 10, max 3 jam)
+4. Tampilkan di ChatListPanel
+
+⚠️ MASALAH #4: CHAT HISTORY TIDAK AUTO-REFRESH
+-----------------------------------------------
+loadChatHistory() hanya dipanggil sekali saat AppShell init.
+Jika ada pesan baru dari web, mobile tidak akan tahu sampai restart app.
+
+HEARTBEAT: Ada timer 30 detik di app_state.dart yang refresh chat,
+tapi hanya jika lastLat/lastLng sudah di-set (dari map).
+
+KEMUNGKINAN: Jika map tidak jalan, heartbeat tidak jalan, chat tidak refresh.
+
+SOLUSI: Pisahkan heartbeat chat dari map, atau tambah manual refresh
+
+3.4 FLOW TEMAN (FRIENDS)
+-------------------------
+
+FILE: lib/features/friends/friends_panel.dart
+FILE: lib/data/repositories/friends_repository.dart
+
+⚠️ MASALAH KRITIS #5: FRIENDS REPOSITORY TIDAK DITEMUKAN
+---------------------------------------------------------
+Saya tidak menemukan file friends_repository.dart di struktur kode!
+
+Ini berarti:
+- Tidak ada endpoint untuk fetch friend requests
+- Tidak ada endpoint untuk accept/reject friend
+- Tidak ada endpoint untuk list friends
+- FriendsPanel kemungkinan kosong atau error
+
+SOLUSI: Buat friends_repository.dart dan endpoint di Next.js
+
+3.5 FLOW SETTINGS
+-----------------
+
+FILE: lib/features/profile/profile_panel.dart
+FILE: lib/data/repositories/profile_repository.dart
+
+PROSES UPDATE SETTINGS:
+1. User ubah setting (contoh: alias)
+2. profileRepository.updateProfile(payload)
+3. PATCH /api/auth/profile
+4. Response: updated profile
+5. Simpan ke SecureStorage
+
+⚠️ MASALAH #6: SETTINGS TIDAK SYNC DARI SERVER
+-----------------------------------------------
+Sama seperti masalah #1, profile hanya dibaca dari local storage.
+Jika user ubah alias di web, mobile tidak akan tahu sampai:
+- User logout dan login lagi, ATAU
+- User ubah setting di mobile (yang akan overwrite perubahan web)
+
+SOLUSI: Fetch profile dari server saat buka ProfilePanel
+
+================================================================================
+BAGIAN 4: ANALISIS KODE NEXT.JS
+================================================================================
+
+4.1 ARSITEKTUR KEAMANAN (PHASE 2)
+----------------------------------
+
+FILE: proxy.ts
+FUNGSI:
+- Dual-mode middleware (UI + API)
+- Verifikasi Bearer token untuk API protected
+- Inject x-user-id ke header internal
+- Return JSON 401 jika token invalid
+
+FILE: app/api/_lib/security.ts
+FUNGSI:
+- extractBearerToken()
+- verifyTokenAndGetUserId()
+- sanitizeRequestHeaders() ← PENTING: hapus x-user-* dari client
+- injectUserContextHeader()
+- extractUserContextFromHeader()
+
+FILE: app/api/_lib/mobile-rest.ts
+FUNGSI:
+- CORS configuration
+- jsonResponse(), errorResponse(), optionsResponse()
+- createAuthedSupabaseClient(token) ← PENTING untuk RLS
+- calculateDistanceKm() ← Haversine formula
+- isMessageWithinThreeHours() ← Chat pruning
+
+4.2 ENDPOINT AUTENTIKASI
+-------------------------
+
+FILE: app/api/auth/mobile-login/route.ts
+PROSES:
+1. Terima email + password
+2. supabase.auth.signInWithPassword()
+3. Load/create profile dari profiles table
+4. Return { access_token, user, profile }
+
+FILE: app/api/auth/mobile-session/route.ts
+PROSES:
+1. Baca userId dari x-user-id (sudah diverifikasi proxy)
+2. Load profile dari profiles table
+3. Return { user_id, profile, session_valid: true }
+
+⚠️ CATATAN: mobile-session TIDAK return access_token lagi (Phase 2)
+
+FILE: app/api/auth/profile/route.ts
+PROSES:
+1. PATCH request dengan payload (contoh: { alias: "NewName" })
+2. Update profiles table
+3. Return updated profile
+
+4.3 ENDPOINT PETA
+-----------------
+
+FILE: app/api/map/visible/route.ts
+PROSES:
+1. Baca lat, lng dari query params
+2. Validasi koordinat
+3. Call RPC get_visible_users(caller_id, user_lat, user_lng)
+4. Filter jarak > 1km (Haversine)
+5. Return array of visible users
+
+⚠️ PENTING: RPC get_visible_users() bergantung pada RLS Supabase
+
+FILE: app/api/map/enable/route.ts
+PROSES:
+1. Terima lat, lng dari body
+2. Update profiles.last_lat, last_lng, updated_at
+3. Return success
+
+4.4 ENDPOINT CHAT
+-----------------
+
+FILE: app/api/chat/history/route.ts
+PROSES:
+1. Baca userId dari x-user-id
+2. Query messages table dengan cutoff 3 jam
+3. Filter lagi di TypeScript (defense-in-depth)
+4. Slice ke 10 pesan terakhir
+5. Return array dengan sender_profile
+
+FILE: app/api/chat/send/route.ts
+PROSES:
+1. Baca userId dari x-user-id
+2. Validasi receiver_id dan content
+3. Insert ke messages table
+4. Return inserted message
+
+4.5 ENDPOINT TEMAN
+------------------
+
+⚠️ MASALAH KRITIS #7: ENDPOINT FRIENDS TIDAK DITEMUKAN
+-------------------------------------------------------
+Saya tidak menemukan endpoint berikut di Next.js:
+- GET /api/friends/list
+- GET /api/friends/requests
+- POST /api/friends/accept
+- POST /api/friends/reject
+- POST /api/friends/add
+
+Ini konsisten dengan masalah #5 di Flutter.
+
+KEMUNGKINAN: Fitur friends belum diimplementasikan di backend,
+atau ada di tempat lain yang tidak terlihat di dokumentasi.
+
+================================================================================
+BAGIAN 5: ANALISIS SUPABASE RLS
+================================================================================
+
+5.1 RLS POLICIES YANG DIPERLUKAN
+---------------------------------
+
+FILE: supabase_rls_setup.sql (ada di root project)
+
+TABEL: profiles
+POLICIES:
+- Users can insert their own profile (INSERT)
+- Users can read their own profile (SELECT)
+- Users can update their own profile (UPDATE)
+
+TABEL: messages
+POLICIES:
+- Users can insert messages they send (INSERT)
+- Users can read messages they send or receive (SELECT)
+
+TABEL: friends (TIDAK DITEMUKAN DI KODE)
+TABEL: friend_requests (TIDAK DITEMUKAN DI KODE)
+
+⚠️ MASALAH #8: RLS BISA MEMBLOKIR DATA
+---------------------------------------
+Jika RLS policies tidak di-setup dengan benar, Supabase akan return:
+- HTTP 403 Forbidden
+- Empty array []
+- JWT malformed error
+
+KEMUNGKINAN: User sudah login, tapi RLS memblokir query karena:
+1. Policy tidak ada
+2. Policy terlalu ketat
+3. Token JWT tidak di-forward ke Supabase client
+
+SOLUSI: Jalankan supabase_rls_setup.sql di Supabase console
+
+5.2 RPC FUNCTION: get_visible_users
+------------------------------------
+
+KONTRAK (dari dokumentasi):
+- Input: caller_id (UUID), user_lat (float), user_lng (float)
+- Output: friends (any distance) + public strangers (≤1km)
+- Kolom: id, username, last_lat, last_lng, relation_type, is_friend
+
+⚠️ CATATAN: SQL body tidak ada di repository, harus cek di Supabase
+
+KEMUNGKINAN MASALAH:
+- RPC tidak ada di Supabase → 404 error
+- RPC ada tapi RLS memblokir → empty array
+- RPC ada tapi logic salah → return data yang salah
+
+================================================================================
+BAGIAN 6: ROOT CAUSE ANALYSIS
+================================================================================
+
+6.1 PETA TIDAK MUNCUL
+----------------------
+
+KEMUNGKINAN PENYEBAB (urutan prioritas):
+
+1. ⭐ GHOST MODE AKTIF
+   - Cek: profiles.is_ghost_mode di database
+   - Jika true, fetchNearbyUsers() akan skip
+   - Solusi: Set is_ghost_mode = false di Supabase
+
+2. ⭐ RLS MEMBLOKIR get_visible_users
+   - Cek: Jalankan query manual di Supabase SQL Editor
+   - Jika error, tambah RLS policy untuk RPC
+   - Solusi: CREATE POLICY untuk execute RPC
+
+3. ⭐ PERMISSION LOKASI TIDAK GRANTED
+   - Cek: Log Flutter untuk "Izin lokasi tidak diberikan"
+   - Jika ada, user harus grant permission manual
+   - Solusi: Restart app dan allow location
+
+4. API ERROR TIDAK TERLIHAT
+   - Cek: app_state.mapError
+   - Jika ada error, tidak ditampilkan di UI
+   - Solusi: Tambah error display di MapScreen
+
+5. KOORDINAT TIDAK VALID
+   - Cek: last_lat, last_lng di profiles table
+   - Jika null, map tidak bisa center
+   - Solusi: Call enableMap() setelah getCurrentPosition()
+
+CARA DEBUG:
+```dart
+// Tambahkan di map_screen.dart setelah fetchNearbyUsers:
+print('Map state: ${appState.mapError}');
+print('Visible users: ${appState.visibleUsers.length}');
+print('Ghost mode: ${appState.currentProfile?.isGhostMode}');
+```
+
+6.2 TEMAN TIDAK MUNCUL
+-----------------------
+
+KEMUNGKINAN PENYEBAB:
+
+1. ⭐⭐⭐ ENDPOINT FRIENDS TIDAK ADA (PALING MUNGKIN)
+   - friends_repository.dart tidak ditemukan
+   - Endpoint /api/friends/* tidak ditemukan
+   - Solusi: BUAT ENDPOINT DAN REPOSITORY BARU
+
+2. DATA FRIENDS TIDAK ADA DI DATABASE
+   - Cek: SELECT * FROM friends WHERE user_id = 'xxx'
+   - Jika empty, memang belum ada teman
+   - Solusi: Tambah teman dari web dulu
+
+3. RLS MEMBLOKIR QUERY FRIENDS
+   - Cek: Policy untuk friends table
+   - Solusi: Tambah policy SELECT untuk own friends
+
+CARA DEBUG:
+```sql
+-- Di Supabase SQL Editor:
+SELECT * FROM friends WHERE user_id = 'USER_ID_DARI_LOGIN';
+SELECT * FROM friend_requests WHERE receiver_id = 'USER_ID_DARI_LOGIN';
+```
+
+6.3 REQUEST TIDAK MUNCUL
+-------------------------
+
+SAMA DENGAN 6.2 - Endpoint dan repository tidak ada.
+
+6.4 PESAN TIDAK MUNCUL
+-----------------------
+
+KEMUNGKINAN PENYEBAB:
+
+1. ⭐ PESAN SUDAH LEBIH DARI 3 JAM
+   - Chat pruning menghapus pesan > 3 jam
+   - Cek: messages.created_at di database
+   - Solusi: Kirim pesan baru untuk test
+
+2. ⭐ HEARTBEAT TIDAK JALAN
+   - Heartbeat bergantung pada lastLat/lastLng
+   - Jika map tidak jalan, chat tidak auto-refresh
+   - Solusi: Manual refresh atau fix map dulu
+
+3. RLS MEMBLOKIR QUERY MESSAGES
+   - Cek: Policy untuk messages table
+   - Solusi: Tambah policy SELECT untuk sender/receiver
+
+4. PESAN DI TABEL YANG SALAH
+   - Cek: Apakah pesan di messages atau dm_messages?
+   - Endpoint history hanya query messages table
+   - Solusi: Pastikan pesan di tabel yang benar
+
+CARA DEBUG:
+```sql
+-- Di Supabase SQL Editor:
+SELECT * FROM messages 
+WHERE (sender_id = 'USER_ID' OR receiver_id = 'USER_ID')
+AND created_at > NOW() - INTERVAL '3 hours'
+ORDER BY created_at DESC
+LIMIT 10;
+```
+
+6.5 SETTINGS TIDAK SYNC
+------------------------
+
+KEMUNGKINAN PENYEBAB:
+
+1. ⭐⭐⭐ PROFILE TIDAK DI-FETCH DARI SERVER (PALING MUNGKIN)
+   - loadProfileFromStorage() hanya baca local
+   - Perubahan di web tidak ter-sync
+   - Solusi: Fetch dari /api/auth/mobile-session
+
+2. CACHE LOCAL OUTDATED
+   - SecureStorage menyimpan profile lama
+   - Solusi: Clear cache atau force refresh
+
+CARA FIX:
+```dart
+// Di app_shell.dart, ganti:
+state.loadProfileFromStorage();
+
+// Menjadi:
+await state.loadProfileFromStorage();
+await state.refreshProfileFromServer(); // TAMBAH METHOD BARU
+```
+
+================================================================================
+BAGIAN 7: REKOMENDASI PERBAIKAN
+================================================================================
+
+7.1 PRIORITAS TINGGI (HARUS DIPERBAIKI)
+----------------------------------------
+
+1. ⭐⭐⭐ BUAT ENDPOINT DAN REPOSITORY FRIENDS
+   File yang perlu dibuat:
+   - lib/data/repositories/friends_repository.dart
+   - app/api/friends/list/route.ts
+   - app/api/friends/requests/route.ts
+   - app/api/friends/accept/route.ts
+   - app/api/friends/reject/route.ts
+   - app/api/friends/add/route.ts
+
+2. ⭐⭐⭐ TAMBAH FETCH PROFILE DARI SERVER
+   File yang perlu diubah:
+   - lib/core/app_state.dart
+     → Tambah method refreshProfileFromServer()
+   - lib/app_shell.dart
+     → Call refreshProfileFromServer() setelah loadProfileFromStorage()
+
+3. ⭐⭐ CEK DAN FIX GHOST MODE
+   Langkah:
+   - Buka Supabase console
+   - SELECT is_ghost_mode FROM profiles WHERE id = 'USER_ID'
+   - Jika true, UPDATE profiles SET is_ghost_mode = false WHERE id = 'USER_ID'
+
+4. ⭐⭐ TAMBAH ERROR DISPLAY DI UI
+   File yang perlu diubah:
+   - lib/features/map/map_screen.dart
+     → Tampilkan appState.mapError dengan SnackBar
+   - lib/features/chat/chat_screen.dart
+     → Tampilkan appState.chatError dengan SnackBar
+
+7.2 PRIORITAS SEDANG (PENTING TAPI TIDAK URGENT)
+-------------------------------------------------
+
+5. ⭐ PISAHKAN HEARTBEAT CHAT DARI MAP
+   File yang perlu diubah:
+   - lib/core/app_state.dart
+     → Buat timer terpisah untuk chat refresh
+
+6. ⭐ TAMBAH MANUAL REFRESH BUTTON
+   File yang perlu diubah:
+   - lib/features/map/map_screen.dart
+     → Tambah FloatingActionButton untuk refresh
+   - lib/features/chat/chat_screen.dart
+     → Tambah pull-to-refresh
+
+7. ⭐ VERIFIKASI RLS POLICIES
+   Langkah:
+   - Jalankan supabase_rls_setup.sql di Supabase console
+   - Test query manual untuk setiap tabel
+   - Pastikan tidak ada 403 error
+
+7.3 PRIORITAS RENDAH (NICE TO HAVE)
+------------------------------------
+
+8. TAMBAH LOADING INDICATOR
+   - Tampilkan loading saat fetch data
+   - Disable button saat proses
+
+9. TAMBAH OFFLINE MODE
+   - Cache data di local storage
+   - Sync saat online kembali
+
+10. TAMBAH ANALYTICS
+    - Track error rate
+    - Track API latency
+
+================================================================================
+BAGIAN 8: LANGKAH-LANGKAH DEBUGGING
+================================================================================
+
+8.1 DEBUGGING PETA
+-------------------
+
+LANGKAH 1: Cek permission lokasi
+```bash
+flutter run -v
+# Lihat log: "Izin lokasi tidak diberikan"
+```
+
+LANGKAH 2: Cek ghost mode
+```sql
+-- Di Supabase SQL Editor:
+SELECT id, username, is_ghost_mode, last_lat, last_lng 
+FROM profiles 
+WHERE id = 'USER_ID_DARI_LOGIN';
+```
+
+LANGKAH 3: Cek API response
+```dart
+// Tambah di map_repository.dart:
+print('Map API response: $resp');
+```
+
+LANGKAH 4: Cek RLS
+```sql
+-- Di Supabase SQL Editor (sebagai authenticated user):
+SELECT get_visible_users('USER_ID', -6.2, 106.8);
+```
+
+8.2 DEBUGGING TEMAN
+-------------------
+
+LANGKAH 1: Cek tabel friends
+```sql
+SELECT * FROM friends WHERE user_id = 'USER_ID';
+```
+
+LANGKAH 2: Cek endpoint
+```bash
+curl -X GET https://zmayy.vercel.app/api/friends/list \
+  -H "Authorization: Bearer TOKEN"
+```
+
+LANGKAH 3: Cek repository
+```bash
+# Cek apakah file ada:
+ls lib/data/repositories/friends_repository.dart
+```
+
+8.3 DEBUGGING CHAT
+------------------
+
+LANGKAH 1: Cek pesan di database
+```sql
+SELECT id, sender_id, receiver_id, content, created_at 
+FROM messages 
+WHERE (sender_id = 'USER_ID' OR receiver_id = 'USER_ID')
+AND created_at > NOW() - INTERVAL '3 hours'
+ORDER BY created_at DESC;
+```
+
+LANGKAH 2: Cek API response
+```bash
+curl -X GET https://zmayy.vercel.app/api/chat/history \
+  -H "Authorization: Bearer TOKEN"
+```
+
+LANGKAH 3: Cek heartbeat
+```dart
+// Tambah di app_state.dart:
+print('Heartbeat tick: lastLat=$lastLat, lastLng=$lastLng');
+```
+
+8.4 DEBUGGING SETTINGS
+----------------------
+
+LANGKAH 1: Cek profile di database
+```sql
+SELECT id, username, alias, notify_sound, is_public 
+FROM profiles 
+WHERE id = 'USER_ID';
+```
+
+LANGKAH 2: Cek local storage
+```dart
+// Tambah di app_state.dart:
+final raw = await SecureStorage.readProfile();
+print('Local profile: $raw');
+```
+
+LANGKAH 3: Cek API response
+```bash
+curl -X GET https://zmayy.vercel.app/api/auth/mobile-session \
+  -H "Authorization: Bearer TOKEN"
+```
+
+================================================================================
+BAGIAN 9: CHECKLIST PERBAIKAN
+================================================================================
+
+UNTUK DEVELOPER:
+
+□ 1. Buka Supabase console dan cek is_ghost_mode
+     → Jika true, set ke false
+
+□ 2. Jalankan supabase_rls_setup.sql di Supabase SQL Editor
+     → Pastikan semua policies ter-create
+
+□ 3. Cek apakah RPC get_visible_users ada di Supabase
+     → Jika tidak ada, buat RPC function
+
+□ 4. Buat friends_repository.dart di Flutter
+     → Copy pattern dari map_repository.dart
+
+□ 5. Buat endpoint /api/friends/* di Next.js
+     → Copy pattern dari /api/map/visible
+
+□ 6. Tambah method refreshProfileFromServer() di app_state.dart
+     → Call /api/auth/mobile-session
+
+□ 7. Update app_shell.dart untuk call refreshProfileFromServer()
+     → Setelah loadProfileFromStorage()
+
+□ 8. Tambah error display di map_screen.dart
+     → SnackBar untuk mapError
+
+□ 9. Tambah error display di chat_screen.dart
+     → SnackBar untuk chatError
+
+□ 10. Test semua fitur:
+      □ Login
+      □ Peta muncul
+      □ Teman muncul
+      □ Request muncul
+      □ Pesan muncul
+      □ Settings sync
+
+================================================================================
+BAGIAN 10: KESIMPULAN
+================================================================================
+
+MASALAH UTAMA:
+--------------
+1. Endpoint dan repository untuk FRIENDS tidak ada (belum diimplementasikan)
+2. Profile tidak di-fetch dari server setelah login (hanya baca local cache)
+3. Ghost mode kemungkinan aktif dan memblokir peta
+4. Error tidak ditampilkan di UI sehingga user tidak tahu ada masalah
+5. Heartbeat chat bergantung pada map, jadi jika map error, chat juga error
+
+SOLUSI UTAMA:
+-------------
+1. Buat endpoint dan repository friends (prioritas tertinggi)
+2. Tambah fetch profile dari server saat app start
+3. Cek dan fix ghost mode di database
+4. Tambah error display di semua screen
+5. Pisahkan heartbeat chat dari map
+
+ESTIMASI WAKTU:
+---------------
+- Fix ghost mode: 5 menit
+- Tambah error display: 30 menit
+- Tambah fetch profile: 1 jam
+- Buat friends endpoint + repository: 4-6 jam
+- Testing menyeluruh: 2 jam
+
+TOTAL: ~8-10 jam kerja
+
+CATATAN PENTING:
+----------------
+Sistem autentikasi sudah bekerja dengan baik (login berhasil).
+Masalah utama ada di data fetching dan fitur yang belum diimplementasikan.
+Setelah perbaikan di atas, semua fitur seharusnya berfungsi normal.
+
+================================================================================
+END OF ANALYSIS
+================================================================================

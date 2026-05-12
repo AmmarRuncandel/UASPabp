@@ -160,10 +160,11 @@ export function normalizeProfile(profile: Partial<Profile> & Pick<Profile, 'id'>
     is_ghost_mode: profile.is_ghost_mode ?? false,
     notifications_enabled: profile.notifications_enabled ?? true,
     is_public: profile.is_public ?? true,
-    notify_global: profile.notify_global ?? profile.notifications_enabled ?? true,
+    notify_global: profile.notify_global ?? true,
     notify_requests: profile.notify_requests ?? true,
     notify_messages: profile.notify_messages ?? true,
     notify_sound: profile.notify_sound ?? true,
+    created_at: profile.created_at ?? null,
   };
 }
 
@@ -184,6 +185,7 @@ export function buildFallbackProfile(user: User | { id: string; email?: string |
     notify_requests: true,
     notify_messages: true,
     notify_sound: true,
+    created_at: null,
   });
 }
 
@@ -221,11 +223,9 @@ export function resolveIsFriend(row: Pick<VisibleUser, 'relation_type' | 'is_fri
   if (row.relation_type === 'friend') {
     return true;
   }
-
   if (row.relation_type === 'stranger') {
     return false;
   }
-
   return row.is_friend === true;
 }
 

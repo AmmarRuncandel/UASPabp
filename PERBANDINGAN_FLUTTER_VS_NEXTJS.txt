@@ -1,0 +1,785 @@
+================================================================================
+PERBANDINGAN STRUKTUR KODE FLUTTER VS NEXT.JS
+================================================================================
+Tanggal: 12 Mei 2026
+Tujuan: Membandingkan implementasi fitur antara Flutter mobile dan Next.js web
+        untuk mengidentifikasi gap dan inkonsistensi
+
+================================================================================
+BAGIAN 1: PERBANDINGAN ARSITEKTUR
+================================================================================
+
+1.1 FLUTTER MOBILE
+------------------
+Arsitektur: Clean Architecture (Repository Pattern)
+
+LAYER:
+- Presentation: lib/features/* (screens, panels)
+- Domain: lib/data/models/* (data models)
+- Data: lib/data/repositories/* (API calls)
+- Core: lib/core/* (config, theme, state management)
+
+STATE MANAGEMENT: Provider (ChangeNotifier)
+- ZmayyAppState: Global app state
+- Repositories: Injected via Provider
+
+ROUTING: MaterialApp + Navigator
+- AppNavigator.navigatorKey untuk global navigation
+- Manual navigation dengan Navigator.push/pop
+
+1.2 NEXT.JS WEB
+---------------
+Arsitektur: App Router (Next.js 13+)
+
+LAYER:
+- UI: app/components/* (React components)
+- API: app/api/* (route handlers)
+- Hooks: app/hooks/* (custom React hooks)
+- Context: app/context/* (React Context)
+- Utils: app/utils/* (helper functions)
+
+STATE MANAGEMENT: React Context + Hooks
+- useAuth, useProfile, useChat (custom hooks)
+- Context providers untuk global state
+
+ROUTING: File-based routing (App Router)
+- app/page.tsx → /
+- app/login/page.tsx → /login
+- app/api/*/route.ts → API endpoints
+
+================================================================================
+BAGIAN 2: PERBANDINGAN FITUR PER FITUR
+================================================================================
+
+2.1 AUTENTIKASI
+---------------
+
+FLUTTER:
+--------
+FILE: lib/features/auth/login_screen.dart
+FILE: lib/features/auth/register_screen.dart
+FILE: lib/data/repositories/auth_repository.dart
+
+ENDPOINT YANG DIGUNAKAN:
+- POST /api/auth/mobile-login
+- POST /api/auth/mobile-register
+- GET /api/auth/mobile-session
+
+FLOW:
+1. User input email + password
+2. AuthRepository.login() → API call
+3. Response: { access_token, user, profile }
+4. Save token ke SecureStorage
+5. Navigate ke AppShell
+
+NEXT.JS:
+--------
+FILE: app/login/page.tsx
+FILE: app/api/auth/mobile-login/route.ts
+FILE: app/api/auth/mobile-register/route.ts
+FILE: app/api/auth/mobile-session/route.ts
+
+FLOW:
+1. User input email + password
+2. supabase.auth.signInWithPassword()
+3. Set cookie session
+4. Redirect ke / (home)
+
+PERBEDAAN:
+----------
+✅ Flutter: Token-based (Bearer token di header)
+✅ Next.js: Cookie-based session (untuk web) + token API (untuk mobile)
+✅ Flutter: Manual token management
+✅ Next.js: Automatic session management via middleware
+
+GAP:
+----
+❌ Flutter tidak punya endpoint untuk refresh token
+❌ Flutter tidak punya endpoint untuk forgot password
+❌ Flutter tidak punya endpoint untuk change password
+
+2.2 PETA (MAP)
+--------------
+
+FLUTTER:
+--------
+FILE: lib/features/map/map_screen.dart
+FILE: lib/data/repositories/map_repository.dart
+
+ENDPOINT YANG DIGUNAKAN:
+- GET /api/map/visible?lat=X&lng=Y
+- POST /api/map/enable
+
+LIBRARY: flutter_map, geolocator
+
+FLOW:
+1. Request location permission
+2. Get current position
+3. Fetch visible users dari API
+4. Render markers di peta
+5. Update setiap 30 detik (heartbeat)
+
+NEXT.JS:
+--------
+FILE: app/components/map/MapViewInner.tsx
+FILE: app/api/map/visible/route.ts
+
+LIBRARY: react-leaflet
+
+FLOW:
+1. navigator.geolocation.watchPosition()
+2. Update profiles.last_lat, last_lng setiap position change
+3. Fetch visible users via RPC get_visible_users
+4. Render markers dengan discriminator friend/stranger
+5. Real-time update via Supabase realtime (optional)
+
+PERBEDAAN:
+----------
+✅ Next.js: Continuous GPS tracking (watchPosition)
+❌ Flutter: One-time position + periodic refresh (30s)
+✅ Next.js: Automatic coordinate update ke database
+❌ Flutter: Manual call enableMap()
+✅ Next.js: Ghost mode wipe coordinates
+❌ Flutter: Ghost mode hanya skip fetch
+
+GAP:
+----
+❌ Flutter tidak punya continuous GPS tracking
+❌ Flutter tidak auto-update coordinates ke database
+❌ Flutter tidak punya ghost mode toggle di UI
+❌ Flutter tidak punya recenter animation yang smooth
+
+REKOMENDASI:
+------------
+1. Ganti Geolocator.getCurrentPosition() dengan getPositionStream()
+2. Auto-update coordinates setiap 5-10 detik
+3. Tambah ghost mode toggle di ProfilePanel
+4. Tambah smooth animation untuk recenter
+
+2.3 CHAT
+--------
+
+FLUTTER:
+--------
+FILE: lib/features/chat/chat_screen.dart (global chat)
+FILE: lib/features/chat/chat_detail_screen.dart (DM)
+FILE: lib/data/repositories/chat_repository.dart
+
+ENDPOINT YANG DIGUNAKAN:
+- GET /api/chat/history
+- POST /api/chat/send
+- GET /api/chat/dm/history?friend_id=X
+- POST /api/chat/dm/send
+
+FLOW:
+1. Load history saat app start
+2. Display messages (max 10, max 3 jam)
+3. Send message → optimistic update
+4. Refresh setiap 30 detik (heartbeat)
+
+NEXT.JS:
+--------
+FILE: app/components/chat/ChatPanel.tsx
+FILE: app/api/chat/history/route.ts
+FILE: app/api/chat/send/route.ts
+
+FLOW:
+1. Load history saat panel open
+2. Subscribe ke Supabase realtime channel
+3. Display messages (max 10, max 3 jam)
+4. Send message → optimistic update
+5. Real-time insert via Supabase subscription
+
+PERBEDAAN:
+----------
+✅ Next.js: Real-time chat via Supabase subscription
+❌ Flutter: Polling setiap 30 detik
+✅ Next.js: Optimistic update dengan rollback
+✅ Flutter: Optimistic update tanpa rollback
+✅ Next.js: Auto-scroll ke bottom setiap message
+❌ Flutter: Manual scroll
+
+GAP:
+----
+❌ Flutter tidak punya real-time chat (harus polling)
+❌ Flutter tidak punya rollback untuk failed send
+❌ Flutter tidak punya auto-scroll
+❌ Flutter tidak punya typing indicator
+❌ Flutter tidak punya read receipts
+
+REKOMENDASI:
+------------
+1. Implementasi Supabase realtime di Flutter
+2. Tambah rollback untuk failed send
+3. Tambah auto-scroll ke bottom
+4. Kurangi polling interval jika tidak pakai realtime
+
+2.4 TEMAN (FRIENDS)
+-------------------
+
+FLUTTER:
+--------
+FILE: lib/features/friends/friends_panel.dart
+FILE: lib/data/repositories/friends_repository.dart ← TIDAK ADA!
+
+ENDPOINT YANG DIGUNAKAN:
+- ❌ TIDAK ADA ENDPOINT
+
+NEXT.JS:
+--------
+FILE: app/components/friends/* ← TIDAK DITEMUKAN DI DOKUMENTASI
+FILE: app/api/friends/* ← TIDAK ADA!
+
+KESIMPULAN:
+-----------
+⚠️ FITUR FRIENDS BELUM DIIMPLEMENTASIKAN DI BACKEND MAUPUN MOBILE!
+
+Berdasarkan Zmayy_Master_Spec.txt, fitur friends seharusnya ada:
+- Friend list
+- Friend requests
+- Add friend via QR/link
+- Accept/reject request
+
+YANG PERLU DIBUAT:
+------------------
+FLUTTER:
+1. lib/data/models/friend.dart ← SUDAH ADA
+2. lib/data/models/friend_request.dart ← SUDAH ADA
+3. lib/data/repositories/friends_repository.dart ← BELUM ADA
+4. Update lib/features/friends/friends_panel.dart ← KOSONG
+
+NEXT.JS:
+1. app/api/friends/list/route.ts
+2. app/api/friends/requests/route.ts
+3. app/api/friends/add/route.ts
+4. app/api/friends/accept/route.ts
+5. app/api/friends/reject/route.ts
+6. app/api/friends/remove/route.ts
+
+SUPABASE:
+1. Tabel friends (user_id, friend_id, created_at)
+2. Tabel friend_requests (sender_id, receiver_id, status, created_at)
+3. RLS policies untuk kedua tabel
+
+2.5 PROFIL & SETTINGS
+---------------------
+
+FLUTTER:
+--------
+FILE: lib/features/profile/profile_panel.dart
+FILE: lib/features/settings/settings_screen.dart
+FILE: lib/data/repositories/profile_repository.dart
+
+ENDPOINT YANG DIGUNAKAN:
+- PATCH /api/auth/profile
+
+SETTINGS YANG BISA DIUBAH:
+- ❌ Tidak ada UI untuk ubah settings di Flutter!
+- ProfilePanel hanya menampilkan info, tidak ada form edit
+
+NEXT.JS:
+--------
+FILE: app/components/profile/ProfileModal.tsx
+FILE: app/components/profile/NotificationsSettingsModal.tsx
+FILE: app/components/profile/PrivacySettingsModal.tsx
+FILE: app/api/auth/profile/route.ts
+
+SETTINGS YANG BISA DIUBAH:
+- Username / Alias
+- Notifications (global, requests, messages, sound)
+- Privacy (is_public, is_ghost_mode)
+- Account deletion
+
+PERBEDAAN:
+----------
+✅ Next.js: Lengkap dengan nested modals untuk settings
+❌ Flutter: Tidak ada UI untuk edit settings
+✅ Next.js: Instant save (no save button)
+❌ Flutter: Tidak ada form edit sama sekali
+✅ Next.js: QR code generation
+❌ Flutter: Tidak ada QR code
+✅ Next.js: Share profile via NFC/Web Share
+❌ Flutter: Tidak ada share functionality
+
+GAP:
+----
+❌ Flutter tidak punya form edit profile
+❌ Flutter tidak punya settings screen yang fungsional
+❌ Flutter tidak punya QR code generation
+❌ Flutter tidak punya share profile
+❌ Flutter tidak punya ghost mode toggle
+❌ Flutter tidak punya notification settings
+
+REKOMENDASI:
+------------
+1. Buat form edit profile di ProfilePanel
+2. Buat SettingsScreen dengan semua opsi dari web
+3. Implementasi QR code dengan qr_flutter package
+4. Implementasi share dengan share_plus package
+5. Tambah toggle untuk ghost mode
+6. Tambah toggle untuk notifications
+
+================================================================================
+BAGIAN 3: PERBANDINGAN API ENDPOINTS
+================================================================================
+
+3.1 ENDPOINT YANG ADA DI NEXT.JS
+---------------------------------
+
+AUTENTIKASI:
+✅ POST /api/auth/mobile-login
+✅ POST /api/auth/mobile-register
+✅ GET /api/auth/mobile-session
+✅ PATCH /api/auth/profile
+
+PETA:
+✅ GET /api/map/visible?lat=X&lng=Y
+✅ POST /api/map/enable
+
+CHAT:
+✅ GET /api/chat/history
+✅ POST /api/chat/send
+✅ GET /api/chat/dm/history?friend_id=X
+✅ POST /api/chat/dm/send
+
+TEMAN:
+❌ GET /api/friends/list
+❌ GET /api/friends/requests
+❌ POST /api/friends/add
+❌ POST /api/friends/accept
+❌ POST /api/friends/reject
+❌ POST /api/friends/remove
+
+3.2 ENDPOINT YANG DIGUNAKAN FLUTTER
+------------------------------------
+
+AUTENTIKASI:
+✅ POST /api/auth/mobile-login
+✅ POST /api/auth/mobile-register
+✅ GET /api/auth/mobile-session
+✅ PATCH /api/auth/profile
+
+PETA:
+✅ GET /api/map/visible?lat=X&lng=Y
+✅ POST /api/map/enable
+
+CHAT:
+✅ GET /api/chat/history
+✅ POST /api/chat/send
+✅ GET /api/chat/dm/history?friend_id=X
+✅ POST /api/chat/dm/send
+
+TEMAN:
+❌ TIDAK ADA (repository belum dibuat)
+
+3.3 ENDPOINT YANG PERLU DIBUAT
+-------------------------------
+
+PRIORITAS TINGGI:
+1. GET /api/friends/list
+   → Return array of friends dengan profile info
+
+2. GET /api/friends/requests
+   → Return array of pending friend requests
+
+3. POST /api/friends/add
+   → Body: { friend_id }
+   → Create friend request
+
+4. POST /api/friends/accept
+   → Body: { request_id }
+   → Accept friend request
+
+5. POST /api/friends/reject
+   → Body: { request_id }
+   → Reject friend request
+
+PRIORITAS SEDANG:
+6. POST /api/friends/remove
+   → Body: { friend_id }
+   → Remove friend
+
+7. GET /api/profile/qr
+   → Generate QR code untuk profile
+
+8. POST /api/auth/refresh-token
+   → Refresh expired token
+
+PRIORITAS RENDAH:
+9. POST /api/auth/forgot-password
+   → Send reset password email
+
+10. POST /api/auth/change-password
+    → Body: { old_password, new_password }
+
+================================================================================
+BAGIAN 4: PERBANDINGAN DATA MODELS
+================================================================================
+
+4.1 FLUTTER MODELS
+------------------
+
+FILE: lib/data/models/user_profile.dart
+FIELDS:
+- id, username, alias, email
+- isGhostMode, isPublic
+- notifyGlobal, notifyRequests, notifyMessages, notifySound
+- lastLat, lastLng, updatedAt
+
+FILE: lib/data/models/visible_user.dart
+FIELDS:
+- id, username, lastLat, lastLng
+- relationType, isOnline, distanceKm
+
+FILE: lib/data/models/chat_message.dart
+FIELDS:
+- id, senderId, receiverId, content, imageUrl
+- createdAt, isMine
+- senderProfile (nested)
+
+FILE: lib/data/models/friend.dart
+FIELDS:
+- id, username, alias, isOnline
+- lastSeen, distanceKm
+
+FILE: lib/data/models/friend_request.dart
+FIELDS:
+- id, senderId, receiverId, status
+- createdAt, senderProfile (nested)
+
+4.2 NEXT.JS TYPES
+-----------------
+
+FILE: utils/supabase/types.ts (berdasarkan dokumentasi)
+
+PROFILE:
+- id, username, alias, email
+- is_ghost_mode, is_public
+- notify_global, notify_requests, notify_messages, notify_sound
+- last_lat, last_lng, updated_at
+
+VISIBLE_USER:
+- id, username, last_lat, last_lng
+- relation_type, is_friend, distance_km
+
+MESSAGE:
+- id, sender_id, receiver_id, content
+- created_at
+
+4.3 PERBEDAAN
+-------------
+
+✅ Flutter: camelCase naming
+✅ Next.js: snake_case naming (sesuai Supabase)
+
+✅ Flutter: Nested senderProfile di ChatMessage
+❌ Next.js: Flat structure, perlu join manual
+
+✅ Flutter: Model punya fromJson() dan toJson()
+✅ Next.js: Type-only (TypeScript interface)
+
+GAP:
+----
+❌ Flutter model tidak punya validation
+❌ Flutter model tidak punya default values
+❌ Next.js tidak punya model class (hanya type)
+
+================================================================================
+BAGIAN 5: PERBANDINGAN STATE MANAGEMENT
+================================================================================
+
+5.1 FLUTTER STATE
+-----------------
+
+FILE: lib/core/app_state.dart
+CLASS: ZmayyAppState extends ChangeNotifier
+
+STATE:
+- currentProfile: UserProfile?
+- currentUserId: String?
+- visibleUsers: List<VisibleUser>
+- chatMessages: List<ChatMessage>
+- isLoadingMap, isLoadingChat, isLoadingProfile
+- mapError, chatError
+
+METHODS:
+- loadProfileFromStorage()
+- setProfile()
+- updateProfileField()
+- setGhostMode()
+- fetchNearbyUsers()
+- loadChatHistory()
+- sendNewMessage()
+- replaceChatMessages()
+- appendChatMessage()
+
+HEARTBEAT:
+- Timer 30 detik untuk refresh map + chat
+
+5.2 NEXT.JS STATE
+-----------------
+
+HOOKS:
+- useAuth() → user, session, loading
+- useProfile() → profile, updateProfile, loading
+- useChat() → messages, sendMessage, loading
+- useMap() → visibleUsers, fetchUsers, loading
+
+CONTEXT:
+- AuthContext → global auth state
+- ProfileContext → global profile state
+
+REALTIME:
+- Supabase subscription untuk chat
+- Supabase subscription untuk map (optional)
+
+5.3 PERBEDAAN
+-------------
+
+✅ Flutter: Centralized state (ZmayyAppState)
+✅ Next.js: Distributed state (multiple hooks)
+
+✅ Flutter: Polling (30s heartbeat)
+✅ Next.js: Real-time (Supabase subscription)
+
+✅ Flutter: Manual state update
+✅ Next.js: Automatic state update via subscription
+
+GAP:
+----
+❌ Flutter tidak punya real-time subscription
+❌ Flutter heartbeat bergantung pada map (coupling)
+❌ Flutter tidak punya loading state per-feature
+
+REKOMENDASI:
+------------
+1. Pisahkan state per-feature (MapState, ChatState, etc.)
+2. Implementasi Supabase realtime di Flutter
+3. Tambah loading state per-feature
+4. Pisahkan heartbeat map dan chat
+
+================================================================================
+BAGIAN 6: PERBANDINGAN UI/UX
+================================================================================
+
+6.1 FLUTTER UI
+--------------
+
+THEME:
+- Dark theme dengan gold accent
+- Base: #0B0E11, Surface: #181A20, Gold: #FCD535
+- Glass effect dengan backdrop blur
+
+NAVIGATION:
+- Bottom navigation bar (Teman, Obrolan, Profil)
+- Side panels slide dari kiri
+- Profile panel slide dari bawah
+
+ANIMATIONS:
+- Slide transition untuk panels
+- Fade transition untuk backdrop
+- No animation untuk map markers
+
+6.2 NEXT.JS UI
+--------------
+
+THEME:
+- Sama dengan Flutter (dark + gold)
+- Glassmorphism dengan backdrop-filter
+- Consistent token system
+
+NAVIGATION:
+- Side panels slide dari kiri/kanan
+- Modals dengan overlay
+- Smooth transitions
+
+ANIMATIONS:
+- Smooth slide untuk panels
+- Fade untuk overlays
+- Glow animation untuk markers
+- Pulse animation untuk online indicator
+
+6.3 PERBEDAAN
+-------------
+
+✅ Flutter: Native feel, smooth 60fps
+✅ Next.js: Web feel, smooth animations
+
+✅ Flutter: Bottom navigation (mobile standard)
+✅ Next.js: Side navigation (web standard)
+
+✅ Flutter: Simple animations
+✅ Next.js: Rich animations (glow, pulse, etc.)
+
+GAP:
+----
+❌ Flutter tidak punya glow effect untuk markers
+❌ Flutter tidak punya pulse animation untuk online
+❌ Flutter tidak punya smooth map animations
+❌ Flutter tidak punya loading skeleton
+
+REKOMENDASI:
+------------
+1. Tambah glow effect untuk friend markers
+2. Tambah pulse animation untuk online indicator
+3. Tambah smooth animation untuk map center
+4. Tambah loading skeleton untuk lists
+
+================================================================================
+BAGIAN 7: PERBANDINGAN KEAMANAN
+================================================================================
+
+7.1 FLUTTER SECURITY
+--------------------
+
+TOKEN STORAGE:
+- flutter_secure_storage untuk token
+- Encrypted storage di device
+
+AUTHENTICATION:
+- Bearer token di Authorization header
+- Manual token management
+- No automatic refresh
+
+API CALLS:
+- ApiClient dengan timeout 15s
+- Manual error handling
+- No retry logic
+
+7.2 NEXT.JS SECURITY
+--------------------
+
+SESSION MANAGEMENT:
+- Cookie-based session untuk web
+- Token-based untuk mobile API
+- Automatic session refresh
+
+MIDDLEWARE:
+- proxy.ts untuk auth verification
+- x-user-id injection
+- Header sanitization
+
+RLS:
+- Supabase Row Level Security
+- Policy-based access control
+- Automatic enforcement
+
+7.3 PERBEDAAN
+-------------
+
+✅ Flutter: Secure storage (encrypted)
+✅ Next.js: Cookie (httpOnly, secure)
+
+✅ Flutter: Manual token management
+✅ Next.js: Automatic session management
+
+✅ Flutter: Client-side validation only
+✅ Next.js: Server-side + RLS validation
+
+GAP:
+----
+❌ Flutter tidak punya automatic token refresh
+❌ Flutter tidak punya retry logic
+❌ Flutter tidak punya request queue
+❌ Flutter tidak punya offline mode
+
+REKOMENDASI:
+------------
+1. Implementasi automatic token refresh
+2. Tambah retry logic untuk failed requests
+3. Tambah request queue untuk offline mode
+4. Tambah biometric authentication
+
+================================================================================
+BAGIAN 8: KESIMPULAN PERBANDINGAN
+================================================================================
+
+8.1 FITUR YANG SUDAH PARITY
+----------------------------
+✅ Login & Register
+✅ Token-based authentication
+✅ Map dengan markers
+✅ Chat global
+✅ DM (Direct Message)
+✅ Dark theme dengan gold accent
+✅ Glass effect UI
+
+8.2 FITUR YANG BELUM PARITY
+----------------------------
+❌ Friends list & requests (BELUM ADA DI BACKEND)
+❌ Real-time chat (Flutter pakai polling)
+❌ Continuous GPS tracking (Flutter one-time)
+❌ Profile edit form (Flutter tidak ada UI)
+❌ Settings screen (Flutter tidak fungsional)
+❌ QR code generation (Flutter tidak ada)
+❌ Share profile (Flutter tidak ada)
+❌ Ghost mode toggle (Flutter tidak ada UI)
+❌ Notification settings (Flutter tidak ada)
+
+8.3 GAP PRIORITAS TINGGI
+-------------------------
+1. ⭐⭐⭐ Buat endpoint & repository friends
+2. ⭐⭐⭐ Tambah profile edit form di Flutter
+3. ⭐⭐ Implementasi real-time chat di Flutter
+4. ⭐⭐ Tambah continuous GPS tracking
+5. ⭐⭐ Tambah settings screen yang fungsional
+
+8.4 GAP PRIORITAS SEDANG
+-------------------------
+6. ⭐ Implementasi QR code generation
+7. ⭐ Implementasi share profile
+8. ⭐ Tambah ghost mode toggle
+9. ⭐ Tambah notification settings
+10. ⭐ Tambah automatic token refresh
+
+8.5 GAP PRIORITAS RENDAH
+-------------------------
+11. Tambah glow effect untuk markers
+12. Tambah pulse animation
+13. Tambah loading skeleton
+14. Tambah offline mode
+15. Tambah biometric auth
+
+================================================================================
+BAGIAN 9: ROADMAP PERBAIKAN
+================================================================================
+
+FASE 1: FIX CRITICAL ISSUES (1-2 hari)
+---------------------------------------
+□ Buat endpoint friends di Next.js
+□ Buat repository friends di Flutter
+□ Fix ghost mode di database
+□ Tambah fetch profile dari server
+□ Tambah error display di UI
+
+FASE 2: FEATURE PARITY (3-5 hari)
+----------------------------------
+□ Implementasi friends list
+□ Implementasi friend requests
+□ Buat profile edit form
+□ Buat settings screen
+□ Implementasi QR code
+□ Implementasi share profile
+
+FASE 3: ENHANCEMENT (5-7 hari)
+-------------------------------
+□ Implementasi real-time chat
+□ Implementasi continuous GPS
+□ Tambah automatic token refresh
+□ Tambah retry logic
+□ Tambah loading skeleton
+□ Tambah animations
+
+FASE 4: POLISH (2-3 hari)
+--------------------------
+□ Tambah offline mode
+□ Tambah biometric auth
+□ Tambah analytics
+□ Performance optimization
+□ Bug fixes
+
+TOTAL ESTIMASI: 11-17 hari kerja
+
+================================================================================
+END OF COMPARISON
+================================================================================

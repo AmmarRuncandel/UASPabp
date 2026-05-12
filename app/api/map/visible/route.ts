@@ -39,8 +39,11 @@ export async function GET(request: NextRequest) {
     // ────────────────────────────────────────────────────────────────────────────
     const userId = extractUserContextFromHeader(request);
     if (!userId) {
+      console.error('[map/visible] Missing user context');
       return errorResponse(request, 'Unauthorized: Missing user context', 401);
     }
+
+    console.log(`[map/visible] Request from user: ${userId}`);
 
     // ────────────────────────────────────────────────────────────────────────────
     // STEP 2: Extract & validate coordinate query parameters
@@ -48,11 +51,14 @@ export async function GET(request: NextRequest) {
     const latParam = request.nextUrl.searchParams.get('lat');
     const lngParam = request.nextUrl.searchParams.get('lng');
 
+    console.log(`[map/visible] Query params - lat: ${latParam}, lng: ${lngParam}`);
+
     // Convert to numbers and validate
     const lat = toNumberOrNull(latParam);
     const lng = toNumberOrNull(lngParam);
 
     if (lat === null || lng === null) {
+      console.error('[map/visible] Invalid coordinates');
       return errorResponse(
         request,
         'Query parameters lat and lng are required and must be valid numbers.',
@@ -62,6 +68,7 @@ export async function GET(request: NextRequest) {
 
     // ✓ IMPROVEMENT: Validate geographic coordinate bounds
     if (lat < -90 || lat > 90) {
+      console.error(`[map/visible] Invalid latitude: ${lat}`);
       return errorResponse(
         request,
         'Latitude must be between -90 and 90.',
@@ -70,6 +77,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (lng < -180 || lng > 180) {
+      console.error(`[map/visible] Invalid longitude: ${lng}`);
       return errorResponse(
         request,
         'Longitude must be between -180 and 180.',
@@ -77,24 +85,52 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    console.log(`[map/visible] Valid coordinates: (${lat}, ${lng})`);
+
     // ────────────────────────────────────────────────────────────────────────────
     // STEP 3: Create Supabase client and call RPC function
     // ────────────────────────────────────────────────────────────────────────────
     const supabase = createAnonSupabaseClient();
 
-    const { data, error } = await supabase.rpc('get_nearby_users', {
+    // ✓ IMPORTANT: RPC function name must match Supabase database
+    // Try get_nearby_users first (primary function), fallback to get_visible_users
+    let data: any = null;
+    let error: any = null;
+
+    console.log(`[map/visible] Calling RPC get_nearby_users for user ${userId} at (${lat}, ${lng})`);
+
+    // Try primary RPC function name
+    const rpcResult = await supabase.rpc('get_nearby_users', {
       caller_id: userId,
       user_lat: lat,
       user_lng: lng,
     });
+
+    data = rpcResult.data;
+    error = rpcResult.error;
+
+    // If function not found, try alternative name
+    if (error && error.message?.includes('function') && error.message?.includes('does not exist')) {
+      console.warn('[map/visible] get_nearby_users not found, trying get_visible_users');
+      const fallbackResult = await supabase.rpc('get_visible_users', {
+        caller_id: userId,
+        user_lat: lat,
+        user_lng: lng,
+      });
+      data = fallbackResult.data;
+      error = fallbackResult.error;
+    }
 
     if (error) {
       console.error(
         `[map/visible] RPC error for user ${userId} at (${lat}, ${lng}):`,
         error
       );
-      return errorResponse(request, error.message, 500);
+      console.error('[map/visible] Error details:', JSON.stringify(error, null, 2));
+      return errorResponse(request, `RPC Error: ${error.message}`, 500);
     }
+
+    console.log(`[map/visible] RPC returned ${data?.length || 0} users`);
 
     // ────────────────────────────────────────────────────────────────────────────
     // STEP 4: Transform RPC results into response format
@@ -106,6 +142,7 @@ export async function GET(request: NextRequest) {
 
         // Skip users without valid coordinates
         if (rowLat === null || rowLng === null) {
+          console.warn(`[map/visible] Skipping user ${row.id} - invalid coordinates`);
           return null;
         }
 
@@ -114,6 +151,7 @@ export async function GET(request: NextRequest) {
 
         // ✓ FILTER: Only include users within 1km (safety & performance)
         if (distanceKm > 1) {
+          console.log(`[map/visible] Filtering out user ${row.id} - distance: ${distanceKm.toFixed(2)}km`);
           return null;
         }
 
@@ -141,7 +179,7 @@ export async function GET(request: NextRequest) {
     // STEP 5: Return response with CORS headers
     // ────────────────────────────────────────────────────────────────────────────
     console.info(
-      `[map/visible] Returned ${visibleUsers.length} visible users for user ${userId} at (${lat}, ${lng})`
+      `[map/visible] Returning ${visibleUsers.length} visible users for user ${userId} at (${lat}, ${lng})`
     );
 
     return jsonResponse(request, visibleUsers);

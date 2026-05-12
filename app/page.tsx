@@ -81,29 +81,47 @@ function DashboardContent() {
 
   // ── Resolve session ────────────────────────────────────────────────────────
   useEffect(() => {
+    console.log('[Dashboard] Initializing...');
+    
     supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (!user) {
+        console.log('[Dashboard] No user found, redirecting to login');
         router.replace('/login');
         return;
       }
+      
+      console.log('[Dashboard] User authenticated:', user.id);
       setUser(user);
 
       // Fetch profile and check if complete
-      const { data: profileData } = await supabase
+      const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', user.id)
         .single();
 
+      if (profileError) {
+        console.error('[Dashboard] Error fetching profile:', profileError);
+      }
+
       if (profileData) {
+        console.log('[Dashboard] Profile loaded:', {
+          id: profileData.id,
+          username: profileData.username,
+          last_lat: profileData.last_lat,
+          last_lng: profileData.last_lng,
+          is_ghost_mode: profileData.is_ghost_mode,
+          is_public: profileData.is_public,
+        });
         setProfile(profileData as Profile);
-        // Do NOT auto-show the profile completion modal on refresh.
-        // Users should open profile settings themselves to complete profile data.
         setIsGhostMode(profileData.is_ghost_mode ?? false);
+      } else {
+        console.warn('[Dashboard] No profile found for user');
       }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      console.log('[Dashboard] Auth state changed:', _event);
       setUser(session?.user ?? null);
       if (!session) router.replace('/login');
     });
