@@ -10,13 +10,6 @@ import {
 import { extractUserContextFromHeader } from '@/app/api/_lib/security';
 import type { Profile } from '@/utils/supabase/types';
 
-type FriendshipRow = {
-  requester_id: string;
-  addressee_id: string;
-  requester: Partial<Profile> & Pick<Profile, 'id'> | null;
-  addressee: Partial<Profile> & Pick<Profile, 'id'> | null;
-};
-
 function getBearerToken(request: NextRequest): string | null {
   const authorization = request.headers.get('authorization');
 
@@ -69,36 +62,64 @@ export async function GET(request: NextRequest) {
 
     const { userId, supabase } = auth;
 
-    const { data, error } = await supabase
+    // ────────────────────────────────────────────────────────────────────────────
+    // STEP 1: Query friendships where user is the ADDRESSEE
+    // ────────────────────────────────────────────────────────────────────────────
+    const { data: asAddressee, error: addresseeError } = await supabase
       .from('friendships')
       .select(`
         requester_id,
+        requester:profiles!friendships_requester_id_fkey(*)
+      `)
+      .eq('status', 'accepted')
+      .eq('addressee_id', userId);
+
+    if (addresseeError) {
+      console.error(`[friends] Query error (as addressee) for user ${userId}:`, addresseeError);
+      return errorResponse(request, addresseeError.message, 500);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // STEP 2: Query friendships where user is the REQUESTER
+    // ────────────────────────────────────────────────────────────────────────────
+    const { data: asRequester, error: requesterError } = await supabase
+      .from('friendships')
+      .select(`
         addressee_id,
-        requester:profiles!friendships_requester_id_fkey(*),
         addressee:profiles!friendships_addressee_id_fkey(*)
       `)
       .eq('status', 'accepted')
-      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`);
+      .eq('requester_id', userId);
 
-    if (error) {
-      console.error(`[friends] Accepted friends query error for user ${userId}:`, error);
-      return errorResponse(request, error.message, 500);
+    if (requesterError) {
+      console.error(`[friends] Query error (as requester) for user ${userId}:`, requesterError);
+      return errorResponse(request, requesterError.message, 500);
     }
 
-    const friends = ((data ?? []) as unknown as FriendshipRow[])
-      .map((row) => {
-        const profile = row.requester_id === userId ? row.addressee : row.requester;
-        const profileData = Array.isArray(profile) ? profile[0] : profile;
-
-        if (!profileData) {
-          return null;
-        }
-
-        return normalizeProfile(profileData);
+    // ────────────────────────────────────────────────────────────────────────────
+    // STEP 3: Normalize and merge results from both queries
+    // ────────────────────────────────────────────────────────────────────────────
+    const friendsFromAddressee = (asAddressee ?? [])
+      .map((row: any) => {
+        const profileData = Array.isArray(row.requester) ? row.requester[0] : row.requester;
+        return profileData ? normalizeProfile(profileData) : null;
       })
-      .filter((profile): profile is Profile => profile !== null && profile !== undefined);
+      .filter((profile): profile is Profile => profile !== null);
 
-    const uniqueFriends = Array.from(new Map(friends.map((profile) => [profile.id, profile])).values());
+    const friendsFromRequester = (asRequester ?? [])
+      .map((row: any) => {
+        const profileData = Array.isArray(row.addressee) ? row.addressee[0] : row.addressee;
+        return profileData ? normalizeProfile(profileData) : null;
+      })
+      .filter((profile): profile is Profile => profile !== null);
+
+    // Merge and deduplicate by profile ID
+    const allFriends = [...friendsFromAddressee, ...friendsFromRequester];
+    const uniqueFriends = Array.from(
+      new Map(allFriends.map((profile) => [profile.id, profile])).values()
+    );
+
+    console.info(`[friends] Returning ${uniqueFriends.length} friends for user ${userId}`);
 
     return jsonResponse(request, uniqueFriends);
   } catch (error) {

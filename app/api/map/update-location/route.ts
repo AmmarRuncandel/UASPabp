@@ -57,7 +57,7 @@ export async function OPTIONS(request: NextRequest) {
   return optionsResponse(request);
 }
 
-export async function POST(request: NextRequest) {
+async function handleLocationUpdate(request: NextRequest) {
   try {
     const auth = await authenticateLocationRequest(request);
     if ('response' in auth) {
@@ -117,4 +117,12 @@ export async function POST(request: NextRequest) {
       500
     );
   }
+}
+
+export async function POST(request: NextRequest) {
+  return handleLocationUpdate(request);
+}
+
+export async function PATCH(request: NextRequest) {
+  return handleLocationUpdate(request);
 }
