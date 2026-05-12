@@ -10,9 +10,9 @@ import {
 import { extractUserContextFromHeader } from '@/app/api/_lib/security';
 
 type UpdateProfileBody = {
-  username?: string;
-  display_name?: string;
-  avatar_initials?: string;
+  username?: string | null;
+  display_name?: string | null;
+  avatar_initials?: string | null;
   is_ghost_mode?: boolean;
   is_public?: boolean;
   notify_global?: boolean;
@@ -147,13 +147,13 @@ export async function PATCH(request: NextRequest) {
     const updatePayload: Partial<UpdateProfileBody> = {};
 
     if (body.username !== undefined) {
-      updatePayload.username = body.username.trim() || null;
+      updatePayload.username = body.username ? body.username.trim() || null : null;
     }
     if (body.display_name !== undefined) {
-      updatePayload.display_name = body.display_name.trim() || null;
+      updatePayload.display_name = body.display_name ? body.display_name.trim() || null : null;
     }
     if (body.avatar_initials !== undefined) {
-      updatePayload.avatar_initials = body.avatar_initials.trim() || null;
+      updatePayload.avatar_initials = body.avatar_initials ? body.avatar_initials.trim() || null : null;
     }
     if (body.is_ghost_mode !== undefined) {
       updatePayload.is_ghost_mode = Boolean(body.is_ghost_mode);
