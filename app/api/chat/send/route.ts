@@ -46,9 +46,13 @@ export async function POST(request: NextRequest) {
       return errorResponse(request, 'Message exceeds the maximum length of 5000 characters.', 400);
     }
 
+    // Create Supabase client with Bearer token in Authorization header
+    // This ensures RLS policies see auth.uid() = userId
     const supabase = createAuthedSupabaseClient(token);
 
-    const { data: authUser, error: authError } = await supabase.auth.getUser(token);
+    // Verify token by attempting to get user — will throw if token invalid
+    // NOTE: auth.getUser() (without params) uses session from client context
+    const { data: authUser, error: authError } = await supabase.auth.getUser();
     if (authError || !authUser.user?.id) {
       console.error('[chat/send] Token verification failed:', authError);
       return errorResponse(request, 'Invalid or expired bearer token.', 401);

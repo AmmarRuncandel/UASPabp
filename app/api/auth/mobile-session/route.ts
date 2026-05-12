@@ -46,7 +46,11 @@ export async function GET(request: NextRequest) {
 
     const { data: profileRow, error: profileError } = await anonClient
       .from('profiles')
-      .select('*')
+      .select(
+        'id, username, display_name, avatar_initials, last_lat, last_lng, '
+        + 'updated_at, is_ghost_mode, notifications_enabled, is_public, '
+        + 'notify_global, notify_requests, notify_messages, notify_sound'
+      )
       .eq('id', userId)
       .maybeSingle();
 
@@ -56,11 +60,20 @@ export async function GET(request: NextRequest) {
     }
 
     // ────────────────────────────────────────────────────────────────────────
-    // STEP 3: Create fallback profile if not found
+    // STEP 3: Return profile from database (do NOT use fallback)
+    // Fallback only used if profile genuinely missing from DB
     // ────────────────────────────────────────────────────────────────────────
-    let profile = profileRow
-      ? normalizeProfile(profileRow)
-      : buildFallbackProfile({ id: userId, email: null });
+    let profile: any;
+    
+    if (profileRow) {
+      // Profile exists in database — return with all fields normalized
+      profile = normalizeProfile(profileRow);
+      console.info(`[mobile-session] Profile loaded for user ${userId}: ${profile.username || profile.display_name}`);
+    } else {
+      // Profile NOT in database — return minimal fallback (should rarely happen)
+      profile = buildFallbackProfile({ id: userId, email: null });
+      console.warn(`[mobile-session] No profile in database for user ${userId}, returning fallback`);
+    }
 
     // ────────────────────────────────────────────────────────────────────────
     // STEP 4: Return session with current profile

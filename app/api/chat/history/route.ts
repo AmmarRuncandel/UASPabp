@@ -35,9 +35,13 @@ export async function GET(request: NextRequest) {
       return errorResponse(request, 'Unauthorized: Missing user context', 401);
     }
 
+    // Create Supabase client with Bearer token in Authorization header
+    // This ensures RLS policies see auth.uid() = userId
     const supabase = createAuthedSupabaseClient(token);
 
-    const { data: authUser, error: authError } = await supabase.auth.getUser(token);
+    // Verify token by attempting to get user — will throw if token invalid
+    // NOTE: auth.getUser() (without params) uses session from client context
+    const { data: authUser, error: authError } = await supabase.auth.getUser();
     if (authError || !authUser.user?.id) {
       console.error('[chat/history] Token verification failed:', authError);
       return errorResponse(request, 'Invalid or expired bearer token.', 401);
@@ -48,10 +52,12 @@ export async function GET(request: NextRequest) {
       return errorResponse(request, 'Unauthorized: Invalid user context', 401);
     }
 
+    // Query messages within last 3 hours, ordered by created_at ASC
     const cutoffIso = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
     const { data, error } = await supabase
       .from('messages')
       .select('id, sender_id, content, created_at')
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)  // Messages sent or received by user
       .gte('created_at', cutoffIso)
       .order('created_at', { ascending: true });
 
