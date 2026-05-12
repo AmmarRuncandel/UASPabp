@@ -10,9 +10,9 @@ import {
 import { extractUserContextFromHeader } from '@/app/api/_lib/security';
 
 type UpdateProfileBody = {
-  username?: string;
-  display_name?: string;
-  avatar_initials?: string;
+  username?: string | null;
+  display_name?: string | null;
+  avatar_initials?: string | null;
   is_ghost_mode?: boolean;
   is_public?: boolean;
   notify_global?: boolean;
