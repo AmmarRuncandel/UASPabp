@@ -87,7 +87,10 @@ export async function GET(request: NextRequest) {
         const profileData = Array.isArray(row.requester) ? row.requester[0] : row.requester;
         return profileData;
       })
-      .filter((profile): profile is FriendRequestRow['requester'] => profile !== null && profile !== undefined)
+      .filter(
+        (profile): profile is NonNullable<FriendRequestRow['requester']> =>
+          profile !== null && profile !== undefined
+      )
       .map((profile) => normalizeProfile(profile));
 
     return jsonResponse(request, requests);
