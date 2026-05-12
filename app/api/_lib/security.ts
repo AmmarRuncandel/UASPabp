@@ -3,52 +3,125 @@
  * ─────────────────────────────────────────────────────────────────────────────────────
  * Responsibilities:
  *  1. Verify JWT tokens (Bearer) and extract user ID
- *  2. Sanitize incoming request headers to prevent spoofing
- *  3. Inject internal headers (x-user-id) after validation
- *  4. Define public/protected routes for middleware bypass
+ *  2. Create authenticated Supabase clients for mobile requests
+ *  3. Provide crash-resistant authentication helpers
  */
 
-import type { NextRequest } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-/**
- * Public API routes that bypass authentication
- * These routes do NOT require Bearer token verification
- */
-export const PUBLIC_ROUTES = [
-  /^\/api\/auth\/mobile-login(\/)?$/,
-  /^\/api\/auth\/mobile-register(\/)?$/,
-  /^\/api\/health(\/)?$/,
-];
-
-/**
- * Check if a request pathname is in the public routes list
- */
-export function isPublicRoute(pathname: string): boolean {
-  return PUBLIC_ROUTES.some((pattern) => pattern.test(pathname));
-}
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * Extract Bearer token from Authorization header
  * Returns null if not found or malformed
  */
-export function extractBearerToken(request: NextRequest): string | null {
-  const authorization = request.headers.get('authorization');
-  if (!authorization) {
+export function extractBearerToken(request: Request): string | null {
+  try {
+    const authorization = request.headers.get('authorization');
+    if (!authorization) {
+      return null;
+    }
+
+    const [scheme, token] = authorization.split(' ');
+    if (scheme !== 'Bearer' || !token) {
+      return null;
+    }
+
+    return token.trim();
+  } catch (error) {
+    console.error('[Security] Error extracting bearer token:', error);
     return null;
   }
+}
 
-  const [scheme, token] = authorization.split(' ');
-  if (scheme !== 'Bearer' || !token) {
-    return null;
+/**
+ * Create authenticated Supabase client from request
+ * This is the CORE function that all protected routes should use
+ * 
+ * CRASH-RESISTANT: Returns client even if token is missing (anon client)
+ * Caller must verify authentication separately if needed
+ */
+export async function createAuthedSupabaseClient(request: Request): Promise<{
+  supabase: SupabaseClient;
+  userId: string | null;
+  token: string | null;
+}> {
+  try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error('Missing Supabase environment variables');
+    }
+
+    // Extract token from Authorization header
+    const token = extractBearerToken(request);
+
+    // If request has Bearer token, create authenticated client
+    if (token) {
+      const client = createClient(supabaseUrl, supabaseKey, {
+        global: {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+        auth: { 
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      });
+
+      // Verify token and get user ID
+      try {
+        const { data, error } = await client.auth.getUser(token);
+        
+        if (error || !data.user?.id) {
+          console.warn('[Security] Token verification failed:', error?.message || 'No user');
+          // Return anon client if token is invalid
+          return {
+            supabase: createClient(supabaseUrl, supabaseKey, {
+              auth: { persistSession: false },
+            }),
+            userId: null,
+            token: null,
+          };
+        }
+
+        return {
+          supabase: client,
+          userId: data.user.id,
+          token,
+        };
+      } catch (verifyError) {
+        console.error('[Security] Token verification error:', verifyError);
+        // Return anon client on verification error
+        return {
+          supabase: createClient(supabaseUrl, supabaseKey, {
+            auth: { persistSession: false },
+          }),
+          userId: null,
+          token: null,
+        };
+      }
+    }
+
+    // No token provided - return anonymous client
+    return {
+      supabase: createClient(supabaseUrl, supabaseKey, {
+        auth: { persistSession: false },
+      }),
+      userId: null,
+      token: null,
+    };
+  } catch (error) {
+    console.error('[Security] Fatal error in createAuthedSupabaseClient:', error);
+    throw error;
   }
-
-  return token.trim();
 }
 
 /**
  * Verify JWT token with Supabase and extract user ID
  * Returns user UUID or null if invalid/expired
+ * 
+ * CRASH-RESISTANT: Always returns null on error, never throws
  */
 export async function verifyTokenAndGetUserId(token: string): Promise<string | null> {
   try {
@@ -66,6 +139,7 @@ export async function verifyTokenAndGetUserId(token: string): Promise<string | n
           Authorization: `Bearer ${token}`,
         },
       },
+      auth: { persistSession: false },
     });
 
     const { data, error } = await client.auth.getUser(token);
@@ -80,63 +154,6 @@ export async function verifyTokenAndGetUserId(token: string): Promise<string | n
     console.error('[Security] Token verification error:', error);
     return null;
   }
-}
-
-/**
- * Sanitize request headers to remove/prevent spoofing of internal headers
- * Internal headers (x-user-*) set by client are removed before processing
- */
-export function sanitizeRequestHeaders(request: NextRequest): Headers {
-  const headers = new Headers(request.headers);
-
-  // Remove any x-user-* headers that might have been injected by client
-  const keysToRemove: string[] = [];
-  headers.forEach((_, key) => {
-    if (key.toLowerCase().startsWith('x-user-')) {
-      keysToRemove.push(key);
-    }
-  });
-
-  keysToRemove.forEach((key) => headers.delete(key));
-
-  return headers;
-}
-
-/**
- * Inject user context header into request after successful token verification
- * This header is ONLY set by the server after validation, never from client
- */
-export function injectUserContextHeader(
-  headers: Headers,
-  userId: string
-): Headers {
-  const newHeaders = new Headers(headers);
-  newHeaders.set('x-user-id', userId);
-  return newHeaders;
-}
-
-/**
- * Extract user context from header set by proxy/middleware
- * Used safely inside route handlers that require authentication
- */
-export function extractUserContextFromHeader(request: NextRequest): string | null {
-  const userId = request.headers.get('x-user-id');
-  if (!userId || userId.trim() === '') {
-    return null;
-  }
-  return userId;
-}
-
-/**
- * Verify that a request has valid user context
- * Returns user ID or throws UnauthorizedError
- */
-export function requireUserContext(request: NextRequest): string {
-  const userId = extractUserContextFromHeader(request);
-  if (!userId) {
-    throw new UnauthorizedError('Missing or invalid user context');
-  }
-  return userId;
 }
 
 /**

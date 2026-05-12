@@ -1,13 +1,12 @@
 import { NextRequest } from 'next/server';
 
 import {
-  createAuthedSupabaseClient,
+  authenticateMobileRequest,
   errorResponse,
   jsonResponse,
   normalizeProfile,
   optionsResponse,
 } from '@/app/api/_lib/mobile-rest';
-import { extractUserContextFromHeader } from '@/app/api/_lib/security';
 
 type UpdateProfileBody = {
   username?: string | null;
@@ -20,45 +19,6 @@ type UpdateProfileBody = {
   notify_messages?: boolean;
   notify_sound?: boolean;
 };
-
-function getBearerToken(request: NextRequest): string | null {
-  const authorization = request.headers.get('authorization');
-
-  if (!authorization) {
-    return null;
-  }
-
-  const [scheme, token] = authorization.split(' ');
-  if (scheme !== 'Bearer' || !token) {
-    return null;
-  }
-
-  return token.trim();
-}
-
-async function authenticateProfileRequest(request: NextRequest) {
-  const userId = extractUserContextFromHeader(request);
-  const token = getBearerToken(request);
-
-  if (!userId || !token) {
-    return { response: errorResponse(request, 'Unauthorized: Missing user context', 401) };
-  }
-
-  const supabase = createAuthedSupabaseClient(token);
-  const { data: authUser, error: authError } = await supabase.auth.getUser(token);
-
-  if (authError || !authUser.user?.id) {
-    console.error('[profile] Token verification failed:', authError);
-    return { response: errorResponse(request, 'Invalid or expired bearer token.', 401) };
-  }
-
-  if (authUser.user.id !== userId) {
-    console.warn(`[profile] User context mismatch. header=${userId}, token=${authUser.user.id}`);
-    return { response: errorResponse(request, 'Unauthorized: Invalid user context', 401) };
-  }
-
-  return { userId, supabase };
-}
 
 export async function OPTIONS(request: NextRequest) {
   return optionsResponse(request);
@@ -76,27 +36,33 @@ export async function OPTIONS(request: NextRequest) {
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await authenticateProfileRequest(request);
-    if ('response' in auth) {
-      return auth.response;
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 1: Authenticate request and get user context
+    // ────────────────────────────────────────────────────────────────────────
+    const authResult = await authenticateMobileRequest(request);
+    if ('response' in authResult) {
+      return authResult.response;
     }
 
-    const { userId, supabase } = auth;
+    const { user, supabase } = authResult;
 
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 2: Fetch profile from database
+    // ────────────────────────────────────────────────────────────────────────
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
-      .eq('id', userId)
+      .eq('id', user.id)
       .single();
 
     if (error) {
-      console.error(`[profile] Profile query error for user ${userId}:`, error);
+      console.error(`[profile] Profile query error for user ${user.id}:`, error);
       return errorResponse(request, error.message, 500);
     }
 
     const profile = normalizeProfile(data);
 
-    console.info(`[profile] Profile retrieved for user ${userId}`);
+    console.info(`[profile] Profile retrieved for user ${user.id}`);
 
     return jsonResponse(request, { profile });
   } catch (error) {
@@ -133,17 +99,20 @@ export async function GET(request: NextRequest) {
  */
 export async function PATCH(request: NextRequest) {
   try {
-    const auth = await authenticateProfileRequest(request);
-    if ('response' in auth) {
-      return auth.response;
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 1: Authenticate request and get user context
+    // ────────────────────────────────────────────────────────────────────────
+    const authResult = await authenticateMobileRequest(request);
+    if ('response' in authResult) {
+      return authResult.response;
     }
 
-    const { userId, supabase } = auth;
-    const body = (await request.json()) as UpdateProfileBody;
+    const { user, supabase } = authResult;
 
     // ────────────────────────────────────────────────────────────────────────
-    // Build update payload with only provided fields
+    // STEP 2: Build update payload with only provided fields
     // ────────────────────────────────────────────────────────────────────────
+    const body = (await request.json()) as UpdateProfileBody;
     const updatePayload: Partial<UpdateProfileBody> = {};
 
     if (body.username !== undefined) {
@@ -179,23 +148,23 @@ export async function PATCH(request: NextRequest) {
     }
 
     // ────────────────────────────────────────────────────────────────────────
-    // Update profile in database
+    // STEP 3: Update profile in database
     // ────────────────────────────────────────────────────────────────────────
     const { data, error } = await supabase
       .from('profiles')
       .update(updatePayload)
-      .eq('id', userId)
+      .eq('id', user.id)
       .select('*')
       .single();
 
     if (error) {
-      console.error(`[profile] Update error for user ${userId}:`, error);
+      console.error(`[profile] Update error for user ${user.id}:`, error);
       return errorResponse(request, error.message, 500);
     }
 
     const profile = normalizeProfile(data);
 
-    console.info(`[profile] Profile updated for user ${userId}`);
+    console.info(`[profile] Profile updated for user ${user.id}`);
 
     return jsonResponse(request, { profile });
   } catch (error) {

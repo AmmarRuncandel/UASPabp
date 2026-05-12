@@ -20,7 +20,7 @@ function assertSupabaseEnvironment() {
   }
 }
 
-function getAllowedOrigin(request: NextRequest): string | null {
+function getAllowedOrigin(request: Request): string | null {
   const origin = request.headers.get('origin');
 
   if (!origin) {
@@ -30,8 +30,18 @@ function getAllowedOrigin(request: NextRequest): string | null {
   return ALLOWED_ORIGINS.has(origin) ? origin : null;
 }
 
-export function buildCorsHeaders(request: NextRequest): Headers {
+export function buildCorsHeaders(request?: Request): Headers {
   const headers = new Headers();
+  
+  if (!request) {
+    // Fallback for OPTIONS or error responses without request context
+    headers.set('Access-Control-Allow-Origin', '*');
+    headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    headers.set('Access-Control-Max-Age', '3600');
+    return headers;
+  }
+
   const allowedOrigin = getAllowedOrigin(request);
   const isAuthenticated = request.headers.has('authorization');
 
@@ -45,12 +55,10 @@ export function buildCorsHeaders(request: NextRequest): Headers {
     if (allowedOrigin) {
       headers.set('Access-Control-Allow-Origin', allowedOrigin);
       headers.set('Access-Control-Allow-Credentials', 'true');
-    } else if (origin) {
-      // Authenticated request from non-whitelisted origin = reject CORS
-      // Browser will block the request anyway, but be explicit
-      headers.set('Access-Control-Allow-Origin', 'null');
+    } else {
+      // For mobile apps without origin header, allow all
+      headers.set('Access-Control-Allow-Origin', '*');
     }
-    // If no origin header, don't set CORS headers (likely server-to-server)
   } else {
     /**
      * Unauthenticated requests (public endpoints):
@@ -64,7 +72,7 @@ export function buildCorsHeaders(request: NextRequest): Headers {
     }
   }
 
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   headers.set('Access-Control-Expose-Headers', 'Content-Type');
   headers.set('Access-Control-Max-Age', '3600'); // Cache preflight for 1 hour
@@ -73,18 +81,19 @@ export function buildCorsHeaders(request: NextRequest): Headers {
   return headers;
 }
 
-export function jsonResponse<T>(request: NextRequest, body: T, status = 200): NextResponse<T> {
+export function jsonResponse<T>(request: Request | null, body: T, status = 200): NextResponse<T> {
   return NextResponse.json(body, {
     status,
-    headers: buildCorsHeaders(request),
+    headers: buildCorsHeaders(request || undefined),
   });
 }
 
-export function errorResponse(request: NextRequest, message: string, status = 400): NextResponse<{ error: string }> {
+export function errorResponse(request: Request | null, message: string, status = 400): NextResponse<{ error: string }> {
+  console.error(`[API Error] ${status}: ${message}`);
   return jsonResponse(request, { error: message }, status);
 }
 
-export function optionsResponse(request: NextRequest): NextResponse {
+export function optionsResponse(request: Request): NextResponse {
   return new NextResponse(null, {
     status: 204,
     headers: buildCorsHeaders(request),
@@ -94,7 +103,9 @@ export function optionsResponse(request: NextRequest): NextResponse {
 export function createAnonSupabaseClient(): SupabaseClient {
   assertSupabaseEnvironment();
 
-  return createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!);
+  return createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!, {
+    auth: { persistSession: false },
+  });
 }
 
 export function createAuthedSupabaseClient(token: string): SupabaseClient {
@@ -106,46 +117,67 @@ export function createAuthedSupabaseClient(token: string): SupabaseClient {
         Authorization: `Bearer ${token}`,
       },
     },
+    auth: { 
+      persistSession: false,
+      autoRefreshToken: false,
+    },
   });
 }
 
-function getBearerToken(request: NextRequest): string | null {
-  const authorization = request.headers.get('authorization');
-  if (!authorization) {
+function getBearerToken(request: Request): string | null {
+  try {
+    const authorization = request.headers.get('authorization');
+    if (!authorization) {
+      return null;
+    }
+
+    const [scheme, token] = authorization.split(' ');
+    if (scheme !== 'Bearer' || !token) {
+      return null;
+    }
+
+    return token.trim();
+  } catch (error) {
+    console.error('[mobile-rest] Error extracting bearer token:', error);
     return null;
   }
-
-  const [scheme, token] = authorization.split(' ');
-  if (scheme !== 'Bearer' || !token) {
-    return null;
-  }
-
-  return token.trim();
 }
 
 export async function authenticateMobileRequest(
-  request: NextRequest
+  request: Request
 ): Promise<
   | { user: User; token: string; supabase: SupabaseClient }
   | { response: NextResponse<{ error: string }> }
 > {
-  const token = getBearerToken(request);
-  if (!token) {
-    return { response: errorResponse(request, 'Missing bearer token.', 401) };
+  try {
+    const token = getBearerToken(request);
+    if (!token) {
+      return { response: errorResponse(request, 'Missing bearer token.', 401) };
+    }
+
+    const anonClient = createAnonSupabaseClient();
+    const { data, error } = await anonClient.auth.getUser(token);
+
+    if (error || !data.user) {
+      console.error('[mobile-rest] Token verification failed:', error?.message);
+      return { response: errorResponse(request, 'Invalid or expired bearer token.', 401) };
+    }
+
+    return {
+      user: data.user,
+      token,
+      supabase: createAuthedSupabaseClient(token),
+    };
+  } catch (error) {
+    console.error('[mobile-rest] Authentication error:', error);
+    return { 
+      response: errorResponse(
+        request, 
+        error instanceof Error ? error.message : 'Authentication failed', 
+        500
+      ) 
+    };
   }
-
-  const anonClient = createAnonSupabaseClient();
-  const { data, error } = await anonClient.auth.getUser(token);
-
-  if (error || !data.user) {
-    return { response: errorResponse(request, 'Invalid or expired bearer token.', 401) };
-  }
-
-  return {
-    user: data.user,
-    token,
-    supabase: createAuthedSupabaseClient(token),
-  };
 }
 
 export function normalizeProfile(profile: Partial<Profile> & Pick<Profile, 'id'>): Profile {

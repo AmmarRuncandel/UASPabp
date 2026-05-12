@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
 
 import {
+  authenticateMobileRequest,
   calculateDistanceKm,
-  createAnonSupabaseClient,
   errorResponse,
   getLastSeenState,
   jsonResponse,
@@ -10,7 +10,6 @@ import {
   resolveIsFriend,
   toNumberOrNull,
 } from '@/app/api/_lib/mobile-rest';
-import { extractUserContextFromHeader } from '@/app/api/_lib/security';
 import type { VisibleUser } from '@/utils/supabase/types';
 
 type VisibleUserResponse = {
@@ -35,15 +34,15 @@ export async function OPTIONS(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     // ────────────────────────────────────────────────────────────────────────────
-    // STEP 1: Extract & validate user context from header (verified by proxy.ts)
+    // STEP 1: Authenticate request and get user context
     // ────────────────────────────────────────────────────────────────────────────
-    const userId = extractUserContextFromHeader(request);
-    if (!userId) {
-      console.error('[map/visible] Missing user context');
-      return errorResponse(request, 'Unauthorized: Missing user context', 401);
+    const authResult = await authenticateMobileRequest(request);
+    if ('response' in authResult) {
+      return authResult.response;
     }
 
-    console.log(`[map/visible] Request from user: ${userId}`);
+    const { user, supabase } = authResult;
+    console.log(`[map/visible] Request from user: ${user.id}`);
 
     // ────────────────────────────────────────────────────────────────────────────
     // STEP 2: Extract & validate coordinate query parameters
@@ -66,7 +65,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // ✓ IMPROVEMENT: Validate geographic coordinate bounds
+    // Validate geographic coordinate bounds
     if (lat < -90 || lat > 90) {
       console.error(`[map/visible] Invalid latitude: ${lat}`);
       return errorResponse(
@@ -88,20 +87,16 @@ export async function GET(request: NextRequest) {
     console.log(`[map/visible] Valid coordinates: (${lat}, ${lng})`);
 
     // ────────────────────────────────────────────────────────────────────────────
-    // STEP 3: Create Supabase client and call RPC function
+    // STEP 3: Call RPC function to get nearby users
     // ────────────────────────────────────────────────────────────────────────────
-    const supabase = createAnonSupabaseClient();
+    console.log(`[map/visible] Calling RPC get_nearby_users for user ${user.id} at (${lat}, ${lng})`);
 
-    // ✓ IMPORTANT: RPC function name must match Supabase database
-    // Try get_nearby_users first (primary function), fallback to get_visible_users
     let data: any = null;
     let error: any = null;
 
-    console.log(`[map/visible] Calling RPC get_nearby_users for user ${userId} at (${lat}, ${lng})`);
-
     // Try primary RPC function name
     const rpcResult = await supabase.rpc('get_nearby_users', {
-      caller_id: userId,
+      caller_id: user.id,
       user_lat: lat,
       user_lng: lng,
     });
@@ -113,7 +108,7 @@ export async function GET(request: NextRequest) {
     if (error && error.message?.includes('function') && error.message?.includes('does not exist')) {
       console.warn('[map/visible] get_nearby_users not found, trying get_visible_users');
       const fallbackResult = await supabase.rpc('get_visible_users', {
-        caller_id: userId,
+        caller_id: user.id,
         user_lat: lat,
         user_lng: lng,
       });
@@ -123,7 +118,7 @@ export async function GET(request: NextRequest) {
 
     if (error) {
       console.error(
-        `[map/visible] RPC error for user ${userId} at (${lat}, ${lng}):`,
+        `[map/visible] RPC error for user ${user.id} at (${lat}, ${lng}):`,
         error
       );
       console.error('[map/visible] Error details:', JSON.stringify(error, null, 2));
@@ -149,7 +144,7 @@ export async function GET(request: NextRequest) {
         // Calculate distance from current position
         const distanceKm = calculateDistanceKm(lat, lng, rowLat, rowLng);
 
-        // ✓ FILTER: Only include users within 1km (safety & performance)
+        // Filter: Only include users within 1km
         if (distanceKm > 1) {
           console.log(`[map/visible] Filtering out user ${row.id} - distance: ${distanceKm.toFixed(2)}km`);
           return null;
@@ -179,7 +174,7 @@ export async function GET(request: NextRequest) {
     // STEP 5: Return response with CORS headers
     // ────────────────────────────────────────────────────────────────────────────
     console.info(
-      `[map/visible] Returning ${visibleUsers.length} visible users for user ${userId} at (${lat}, ${lng})`
+      `[map/visible] Returning ${visibleUsers.length} visible users for user ${user.id} at (${lat}, ${lng})`
     );
 
     return jsonResponse(request, visibleUsers);

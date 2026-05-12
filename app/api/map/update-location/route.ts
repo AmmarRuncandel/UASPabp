@@ -1,57 +1,17 @@
 import { NextRequest } from 'next/server';
 
 import {
-  createAuthedSupabaseClient,
+  authenticateMobileRequest,
   errorResponse,
   jsonResponse,
   optionsResponse,
   toNumberOrNull,
 } from '@/app/api/_lib/mobile-rest';
-import { extractUserContextFromHeader } from '@/app/api/_lib/security';
 
 type UpdateLocationBody = {
   lat?: number;
   lng?: number;
 };
-
-function getBearerToken(request: NextRequest): string | null {
-  const authorization = request.headers.get('authorization');
-
-  if (!authorization) {
-    return null;
-  }
-
-  const [scheme, token] = authorization.split(' ');
-  if (scheme !== 'Bearer' || !token) {
-    return null;
-  }
-
-  return token.trim();
-}
-
-async function authenticateLocationRequest(request: NextRequest) {
-  const userId = extractUserContextFromHeader(request);
-  const token = getBearerToken(request);
-
-  if (!userId || !token) {
-    return { response: errorResponse(request, 'Unauthorized: Missing user context', 401) };
-  }
-
-  const supabase = createAuthedSupabaseClient(token);
-  const { data: authUser, error: authError } = await supabase.auth.getUser(token);
-
-  if (authError || !authUser.user?.id) {
-    console.error('[map/update-location] Token verification failed:', authError);
-    return { response: errorResponse(request, 'Invalid or expired bearer token.', 401) };
-  }
-
-  if (authUser.user.id !== userId) {
-    console.warn(`[map/update-location] User context mismatch. header=${userId}, token=${authUser.user.id}`);
-    return { response: errorResponse(request, 'Unauthorized: Invalid user context', 401) };
-  }
-
-  return { userId, supabase };
-}
 
 export async function OPTIONS(request: NextRequest) {
   return optionsResponse(request);
@@ -59,15 +19,22 @@ export async function OPTIONS(request: NextRequest) {
 
 async function handleLocationUpdate(request: NextRequest) {
   try {
-    const auth = await authenticateLocationRequest(request);
-    if ('response' in auth) {
-      return auth.response;
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 1: Authenticate request and get user context
+    // ────────────────────────────────────────────────────────────────────────
+    const authResult = await authenticateMobileRequest(request);
+    if ('response' in authResult) {
+      return authResult.response;
     }
 
-    const { userId, supabase } = auth;
+    const { user, supabase } = authResult;
+
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 2: Validate request body
+    // ────────────────────────────────────────────────────────────────────────
     const body = (await request.json()) as UpdateLocationBody;
 
-    console.log(`[map/update-location] Request from user: ${userId}`);
+    console.log(`[map/update-location] Request from user: ${user.id}`);
     console.log(`[map/update-location] Body:`, body);
 
     const lat = toNumberOrNull(body.lat);
@@ -89,9 +56,11 @@ async function handleLocationUpdate(request: NextRequest) {
       return errorResponse(request, 'Longitude must be between -180 and 180.', 400);
     }
 
-    console.log(`[map/update-location] Updating location for user ${userId} to (${lat}, ${lng})`);
+    console.log(`[map/update-location] Updating location for user ${user.id} to (${lat}, ${lng})`);
 
-    // Update location in database
+    // ────────────────────────────────────────────────────────────────────────
+    // STEP 3: Update location in database
+    // ────────────────────────────────────────────────────────────────────────
     const { error } = await supabase
       .from('profiles')
       .update({
@@ -99,14 +68,14 @@ async function handleLocationUpdate(request: NextRequest) {
         last_lng: lng,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', userId);
+      .eq('id', user.id);
 
     if (error) {
-      console.error(`[map/update-location] Update error for user ${userId}:`, error);
+      console.error(`[map/update-location] Update error for user ${user.id}:`, error);
       return errorResponse(request, error.message, 500);
     }
 
-    console.info(`[map/update-location] Location updated successfully for user ${userId}: (${lat}, ${lng})`);
+    console.info(`[map/update-location] Location updated successfully for user ${user.id}: (${lat}, ${lng})`);
 
     return jsonResponse(request, { success: true, lat, lng });
   } catch (error) {
