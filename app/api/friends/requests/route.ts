@@ -81,9 +81,13 @@ export async function GET(request: NextRequest) {
       return errorResponse(request, error.message, 500);
     }
 
-    const requests = ((data ?? []) as FriendRequestRow[])
-      .map((row) => row.requester)
-      .filter((profile): profile is FriendRequestRow['requester'] => profile !== null)
+    const requests = ((data ?? []) as unknown as FriendRequestRow[])
+      .map((row) => {
+        // Tangani secara aman jika hasil join Supabase berbentuk array
+        const profileData = Array.isArray(row.requester) ? row.requester[0] : row.requester;
+        return profileData;
+      })
+      .filter((profile): profile is FriendRequestRow['requester'] => profile !== null && profile !== undefined)
       .map((profile) => normalizeProfile(profile));
 
     return jsonResponse(request, requests);
